@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { handleImportImage } from '../../src/main/image-import-handler.js'
+import { handleImportImage, handleImportImageFromBase64 } from '../../src/main/image-import-handler.js'
 import type { AppContext } from '../../src/main/app-context.js'
 
 // 最小有效 1×1 红色 PNG（67 字节）
@@ -126,6 +126,82 @@ describe('handleImportImage', () => {
     ctx.imagePath = '/some/old/path.png'
 
     await handleImportImage(txtFilePath, ctx)
+
+    assert.strictEqual(ctx.imagePath, '/some/old/path.png')
+    assert.strictEqual(ctx.imageBuffer!.toString(), 'previous')
+  })
+})
+
+describe('handleImportImageFromBase64', () => {
+  function makeDataUrl(base64: string, format = 'png'): string {
+    return `data:image/${format};base64,${base64}`
+  }
+
+  it('合法 PNG data URL → success: true', () => {
+    const ctx = createMockContext()
+    const result = handleImportImageFromBase64(
+      makeDataUrl(MINIMAL_PNG_BASE64),
+      ctx,
+    )
+
+    assert.strictEqual(result.success, true)
+    assert.strictEqual(result.fileName, 'image.png')
+    assert.ok(ctx.imageBuffer)
+    assert.ok(ctx.imageBuffer!.length > 0)
+  })
+
+  it('合法 JPEG data URL → success: true', () => {
+    const ctx = createMockContext()
+    const result = handleImportImageFromBase64(
+      makeDataUrl(MINIMAL_JPEG_BASE64, 'jpeg'),
+      ctx,
+    )
+
+    assert.strictEqual(result.success, true)
+    assert.strictEqual(result.fileName, 'image.jpg')
+  })
+
+  it('无效 data URL 格式 → success: false', () => {
+    const ctx = createMockContext()
+    const result = handleImportImageFromBase64('not-a-data-url', ctx)
+
+    assert.strictEqual(result.success, false)
+    assert.ok(result.reason!.includes('无效'))
+  })
+
+  it('不支持的 MIME 类型 → success: false', () => {
+    const ctx = createMockContext()
+    const result = handleImportImageFromBase64(
+      makeDataUrl(MINIMAL_PNG_BASE64, 'gif'),
+      ctx,
+    )
+
+    assert.strictEqual(result.success, false)
+    assert.ok(result.reason!.includes('不支持'))
+  })
+
+  it('空 base64 数据 → success: false', () => {
+    const ctx = createMockContext()
+    const result = handleImportImageFromBase64('data:image/png;base64,', ctx)
+
+    assert.strictEqual(result.success, false)
+  })
+
+  it('.png MIME 但内容非 PNG → success: false', () => {
+    const ctx = createMockContext()
+    const fakeDataUrl = `data:image/png;base64,${Buffer.from('not a png').toString('base64')}`
+    const result = handleImportImageFromBase64(fakeDataUrl, ctx)
+
+    assert.strictEqual(result.success, false)
+    assert.ok(result.reason!.includes('校验失败') || result.reason!.includes('损坏'))
+  })
+
+  it('导入失败不覆盖 context 中原有数据', () => {
+    const ctx = createMockContext()
+    ctx.imageBuffer = Buffer.from('previous')
+    ctx.imagePath = '/some/old/path.png'
+
+    handleImportImageFromBase64('not-a-data-url', ctx)
 
     assert.strictEqual(ctx.imagePath, '/some/old/path.png')
     assert.strictEqual(ctx.imageBuffer!.toString(), 'previous')

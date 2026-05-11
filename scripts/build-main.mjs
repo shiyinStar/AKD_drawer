@@ -1,13 +1,18 @@
 import * as esbuild from 'esbuild'
 
-await esbuild.build({
-  entryPoints: ['src/main/index.ts', 'src/preload/index.ts'],
-  format: 'esm',
+const shared = {
   platform: 'node',
   target: 'node20',
   bundle: true,
   sourcemap: true,
-  outdir: 'dist/main',
+}
+
+// Main Process — ESM 格式，由 Node.js 以 ESM 加载
+await esbuild.build({
+  ...shared,
+  entryPoints: ['src/main/index.ts'],
+  format: 'esm',
+  outfile: 'dist/main/main/index.js',
   external: [
     'electron',
     'onnxruntime-node',
@@ -27,4 +32,13 @@ await esbuild.build({
     'node:module',
     'node:process',
   ],
+})
+
+// Preload — CJS 格式 (.cjs)，绕过 package.json "type": "module"
+await esbuild.build({
+  ...shared,
+  entryPoints: ['src/preload/index.ts'],
+  format: 'cjs',
+  outfile: 'dist/main/preload/index.cjs',
+  external: ['electron'],
 })

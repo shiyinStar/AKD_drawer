@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import type { StatusState, ToastMessage } from '../shared/types.js'
+import type { StatusState, ToastMessage, PipelineProgress } from '../shared/types.js'
 import TitleBar from './components/TitleBar.vue'
 import SideNav from './components/SideNav.vue'
 import ContentRouter from './components/ContentRouter.vue'
@@ -11,15 +11,23 @@ import ToastContainer from './components/ToastContainer.vue'
 const activePanel = ref<string>('image')
 const appStatus = ref<StatusState>('NOT_READY' as StatusState)
 const statusExtra = ref<string>('等待导入图片')
+const isPipelineRunning = ref(false)
+
+function updateStatusExtra() {
+  if (appStatus.value === 'NOT_READY') {
+    statusExtra.value = isPipelineRunning.value ? '等待线稿提取' : '等待导入图片'
+  }
+}
 
 function onAppStateChange(state: StatusState) {
   appStatus.value = state
   switch (state) {
     case 'NOT_READY':
-      statusExtra.value = '等待导入图片'
+      updateStatusExtra()
       break
     case 'IDLE':
       statusExtra.value = ''
+      isPipelineRunning.value = false
       break
     case 'PREVIEWING':
       statusExtra.value = '1.0x'
@@ -29,7 +37,19 @@ function onAppStateChange(state: StatusState) {
       break
     case 'ERROR':
       statusExtra.value = ''
+      isPipelineRunning.value = false
       break
+  }
+}
+
+function onPipelineProgress(progress: PipelineProgress) {
+  if (progress.progress < 100) {
+    isPipelineRunning.value = true
+  } else {
+    isPipelineRunning.value = false
+  }
+  if (appStatus.value === 'NOT_READY') {
+    updateStatusExtra()
   }
 }
 
@@ -84,6 +104,7 @@ onMounted(async () => {
   }
 
   window.electronAPI.onAppStateChange((state) => onAppStateChange(state))
+  window.electronAPI.onPipelineProgress((progress) => onPipelineProgress(progress))
   window.electronAPI.onToast((toast) => addToast(toast))
 })
 </script>

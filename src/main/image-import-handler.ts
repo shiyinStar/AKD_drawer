@@ -97,3 +97,50 @@ export async function handleImportImage(
     fileName,
   }
 }
+
+export function handleImportImageFromBase64(
+  dataUrl: string,
+  ctx: AppContext,
+): ImportResult {
+  const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/)
+  if (!match) {
+    return { success: false, reason: '无效的图片数据格式' }
+  }
+
+  const mime = match[1]
+  const mimeToExt: Record<string, string> = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/bmp': '.bmp',
+  }
+  const ext = mimeToExt[mime]
+  if (!ext) {
+    return { success: false, reason: `不支持的图片格式: ${mime}` }
+  }
+
+  let buffer: Buffer
+  try {
+    buffer = Buffer.from(match[2], 'base64')
+  } catch {
+    return { success: false, reason: '图片数据解码失败' }
+  }
+
+  if (buffer.length === 0) {
+    return { success: false, reason: '图片数据为空' }
+  }
+
+  const formatError = validateFormat(`image${ext}`, buffer)
+  if (formatError) {
+    return { success: false, reason: formatError }
+  }
+
+  ctx.imageBuffer = buffer
+  ctx.imagePath = `image${ext}`
+
+  return {
+    success: true,
+    dataUrl,
+    fileName: `image${ext}`,
+  }
+}

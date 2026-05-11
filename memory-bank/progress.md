@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-11 (阶段 4 完成)
+**最后更新**: 2026-05-11 (阶段 5 完成)
 
 ---
 
@@ -303,13 +303,125 @@
 | `npx tsx --test tests/unit/image-import-handler.test.ts` | 8/8 通过 |
 | 源码 `require()` 检查 | 0 匹配 |
 
-## 下一步：阶段 5 — 推理管线
+## 阶段 5：推理管线 ✅ 完成
+
+### 步骤 5.1 — 模型文件部署配置 ✅
+- `package.json` 添加 `build` 字段：`appId: com.akd.app`、`extraResources` 含 `resources/models`、`asarUnpack` 含 onnxruntime-node/sharp/opencv-js
+
+### 步骤 5.2 — 推理 Worker ✅
+- `src/workers/inference/worker.ts` 完整实现：
+  - 使用 `onnxruntime-node` 加载 `anime2sketch.onnx` 模型（CPU 推理）
+  - 预处理：sharp resize 512×512 fill → `.removeAlpha()` → RGB raw → NCHW Float32Array 归一化 [-1,1]
+  - 后处理：反归一化 → Uint8Array [0,255] → sharp 缩放回原始尺寸 → PNG Buffer
+  - 消息协议：接收 `{ type: 'infer', imageBuffer }` → 发送 `{ type: 'result', lineArtBuffer }` 或 `{ type: 'error', message }`
+  - 30s 超时保护
+  - 模型路径通过 `workerData.modelPath` 传入
+  - 原始图片尺寸通过 sharp metadata 自动检测
+
+### 步骤 5.3 — Worker 管理器 ✅
+- `src/main/worker-manager.ts` 创建：
+  - `runInference(modelPath, imageBuffer): Promise<Buffer>` 方法
+  - 封装 Worker 生命周期：创建 → postMessage → 等待结果 → terminate
+  - 30s 超时 → `worker.terminate()` + reject
+  - error/messageerror 事件处理 + 清理
+
+### 步骤 5.4 — 管线编排器 ✅
+- `src/main/pipeline-orchestrator.ts` 创建：
+  - `createPipelineOrchestrator(deps)` 工厂函数
+  - `run(imageBuffer)` 方法：推送 pipeline-progress → 调用 runInference → 存储 lineArtBuffer/lineArtBase64 到 context → 推送 pipeline-complete → 状态转 IDLE → 推送 Toast
+  - 推理失败 → 状态转 ERROR → 推送 app-error + Toast 错误通知
+- `src/shared/types.ts`：新增 `PipelineCompleteData` 接口（lineArtBase64, pathCount, boundingBox）
+- `src/main/app-context.ts`：新增 `lineArtBuffer: Buffer | null`、`lineArtBase64: string | null`
+- `src/main/ipc-handlers.ts`：`IpcHandlerDeps` 新增 `runPipeline` 回调；`IMPORT_IMAGE` handler 成功后触发管线
+- `src/main/index.ts`：新增 `resolveModelPath()` 函数（区分 dev/prod 路径）；创建 pipeline orchestrator 并传入 `registerIpcHandlers`
+- `scripts/dev.ts`：启动前自动构建 Workers
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1538 模块 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/inference-worker.test.ts` | 6/6 通过 |
+| 源码 `require()` 检查 | 0 匹配 |
+
+### 阶段 5 Bug 修复记录
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| Worker 测试 `Dynamic require of "node:util"` | esbuild `bundle: true` 将 CJS 依赖包裹在 `__require()` 中，与 ESM Worker 不兼容 | `build-workers.mjs` 改为 `bundle: false`，Node.js 原生处理 CJS→ESM 互操作 |
+
+## 阶段 5 集成修复记录
+
+以下问题在阶段 5 完成后通过实际运行发现并修复：
+
+### Bug 1：线稿提取完成但渲染进程不显示
+- **原因**：`preload/index.ts` 缺少 `onPipelineComplete` 方法，渲染进程无法接收 `pipeline-complete` 事件
+- **修复**：preload 新增 `onPipelineComplete` → `env.d.ts` 新增类型 → `ImagePanel.vue` `onMounted` 注册监听，设置 `lineArtSrc`
+
+### Bug 2：导入图片后推理管线未触发
+- **原因**：Electron 沙箱模式下 `file.path` 为 `undefined`，`onFileChange` 全部走 `FileReader.readAsDataURL()` 在渲染进程读取，数据从未到达主进程
+- **修复**：
+  - `image-import-handler.ts`：新增 `handleImportImageFromBase64(dataUrl, ctx)` 同步函数，从 data URL 解码 Buffer 并校验格式
+  - `ipc-handlers.ts`：`IMPORT_IMAGE` handler 检测输入前缀：`data:` → base64 导入，否则 → 文件路径导入
+  - `ImageDropZone.vue`：`readAndEmit` 中 FileReader 完成后调用 `window.electronAPI.importImage(dataUrl)` 发送数据到主进程
+  - 新增 7 个单元测试覆盖 base64 导入路径（tests 从 8→15）
+
+### Bug 3：状态栏在提取线稿时仍显示"等待导入图片"
+- **原因**：`App.vue` 中 `NOT_READY` 状态固定映射到"等待导入图片"，未区分"尚未导入"和"正在推理"
+- **修复**：新增 `isPipelineRunning` ref，监听 `onPipelineProgress` 事件：progress < 100 → `isPipelineRunning = true`，`NOT_READY` 状态下显示"等待线稿提取"
+
+### Bug 4：preload 脚本加载失败 `SyntaxError: Cannot use import statement outside a module`
+- **原因**：`package.json` `"type": "module"` 导致 Electron 将 preload 的 `.js` 文件以 ESM 解析，但 preload 使用 `require('electron')`（CJS）
+- **修复**：
+  - `scripts/build-main.mjs`：拆分为两个独立构建，Main Process → ESM `.js`，Preload → CJS `.cjs`
+  - `src/main/index.ts`：`webPreferences.preload` 路径改为 `index.cjs`，新增 `sandbox: false`
+
+### Bug 5：切换面板后图片状态丢失
+- **原因**：`ContentRouter.vue` 使用 `:key="activePanel"` 配合 `<Transition>`，切换面板时组件被销毁重建
+- **修复**：包裹 `<KeepAlive>` 缓存组件实例，切换时保留 `originalSrc` / `lineArtSrc` / `hasImage`
+
+### Bug 6：导出线稿按钮始终禁用
+- **原因**：按钮 `:disabled="!hasImage"` 仅在导入后启用，但线稿可能尚未提取完成；且按钮无点击事件
+- **修复**：
+  - `PanelToolbar.vue`：新增 `hasLineArt` prop + `export` emit，按钮改为 `:disabled="!hasLineArt"`
+  - `ImagePanel.vue`：新增 `hasLineArt` computed（`lineArtSrc !== null`） + `onExportClick` 调用 IPC
+  - `ipc-handlers.ts`：实现 `export-lineart` handler（检查 buffer → 保存对话框 → `writeFile` → Toast）
+
+### Bug 7：按钮和导航项缺少按下微交互
+- **原因**：`.btn` 和 `.nav-item` 仅有 `:hover` 样式，无 `:active` 按下反馈
+- **修复**：
+  - `PanelToolbar.vue`：主按钮 `:active: scale(0.97)`；次按钮新增 `:hover: translateY(-1px)` + `:active: scale(0.97)`
+  - `NavItem.vue`：新增 `transform` 过渡 + `:active: scale(0.92)`
+
+### 新增测试
+| 文件 | 用例 | 说明 |
+|------|------|------|
+| `tests/unit/inference-worker.test.ts` | 6 | Worker 启动、PNG 验证、尺寸一致、多尺寸、全黑边界、错误路径 |
+| `tests/unit/image-import-handler.test.ts` | +7 | base64 导入：合法/非法/不支持格式/空数据/校验失败/不覆盖 |
+
+### 构建系统变更
+| 文件 | 变更 |
+|------|------|
+| `scripts/build-main.mjs` | 拆分为两个构建：Main (ESM→`.js`) + Preload (CJS→`.cjs`) |
+| `scripts/build-workers.mjs` | `bundle: false`（非打包模式，保留原生 import） |
+| `scripts/dev.ts` | 启动前自动构建 Workers |
+
+## 下一步：阶段 6 — 路径提取
 
 ---
 
 ## 给后续开发者的备注
 
-1. Main Process、Preload、Renderer 入口已实现，Worker 文件仍为占位注释
-2. Node.js v24 内置 TS strip 模式不支持 enum 语法，需经 esbuild/tsx 编译后使用
-3. 项目遵循 100% ESM，禁止 CommonJS（nut-js 有唯一的 CJS Adapter）
-4. `@techstark/opencv-js` 实际版本号是 `4.12.0-release.1`，非 `^4.12.0`
+1. **preload 是关键桥接层**：新增 IPC 监听器需同步修改 3 个文件（preload/index.ts → env.d.ts → 消费组件）
+2. **Electron 沙箱**：`sandbox: false` 已关闭，`file.path` 现可用于 `<input type="file">` 和拖拽
+3. **preload 构建**：必须输出 `.cjs` 扩展名，否则 `"type": "module"` 导致 Electron 以 ESM 解析失败
+4. **Worker 构建**：`bundle: false` 避免 CJS 依赖被包裹在 `__require()` 中，与 ESM Worker 不兼容
+5. **Main Process 改动需重启**：`scripts/dev.ts` 已自动构建 Main+Workers，但需手动重启 Electron
+6. **KeepAlive** 已在 `ContentRouter` 中使用，新增需要保持状态的组件无需额外处理
+7. 所有源码 `require()` 调用仅限 `dist/` 构建产物，`src/` 下零 CommonJS

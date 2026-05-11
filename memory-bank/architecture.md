@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-11 (阶段 4 完成)
+**最后更新**: 2026-05-11 (阶段 5 集成修复完成)
 
 ---
 
@@ -28,7 +28,9 @@ AKD_final/
 │   │   ├── ipc-handlers.ts        # IPC 通信层
 │   │   ├── image-import-handler.ts # 图片导入与校验
 │   │   ├── state-machine.ts       # 全局状态机
-│   │   └── config-store.ts        # 配置存储
+│   │   ├── config-store.ts        # 配置存储
+│   │   ├── worker-manager.ts       # Worker 生命周期管理
+│   │   ├── pipeline-orchestrator.ts # 管线编排器
 │   ├── preload/
 │   │   └── index.ts          # contextBridge preload 脚本
 │   ├── shared/
@@ -147,7 +149,8 @@ Electron 主进程入口。`app.whenReady()` → `createAppContext()` → `creat
 - `mainWindow: BrowserWindow | null` — 主窗口引用（初始 null，窗口创建后赋值）
 - `imageBuffer: Buffer | null` — 当前导入的图片 Buffer（内存中，供推理/路径提取 Worker 消费）— 阶段 4 新增
 - `imagePath: string | null` — 当前导入的图片完整路径 — 阶段 4 新增
-- `width: number` / `height: number` — 图片尺寸（预留，暂未填充）— 阶段 4 新增
+- `lineArtBuffer: Buffer | null` — 推理产出的线稿 PNG Buffer（供 UI 展示和路径提取 Worker 消费）— 阶段 5 新增
+- `lineArtBase64: string | null` — 线稿 base64 编码字符串（供 IPC 传输到渲染进程）— 阶段 5 新增
 - `createAppContext()` 工厂函数负责组装，禁止模块间全局 import 互相引用
 
 ### src/main/ipc-handlers.ts
@@ -333,11 +336,36 @@ Toast 容器 — 阶段 4 新增。固定定位右下角（`bottom: 12px; right:
 ### src/renderer/components/SettingsPanel.vue
 设置面板占位组件，仅显示居中 "设置" 文字（`--color-surface-500`）。阶段 12 将替换为完整设置表单。
 
-### src/workers/inference/worker.ts (占位)
-ONNX Runtime 推理 Worker。后续将: 加载 anime2sketch.onnx 模型、图片预处理/推理/后处理。
+### src/workers/inference/worker.ts
+ONNX Runtime 推理 Worker — 阶段 5 实现：
+- 通过 `workerData.modelPath` 接收模型路径，`InferenceSession.create()` 加载模型（CPU 推理，会话缓存复用）
+- 预处理：`sharp` resize 512×512 fill → `.removeAlpha()` 确保 3 通道 RGB → raw 像素 → NCHW Float32Array 归一化 `[-1, 1]`
+- 推理：构造 `ort.Tensor('float32', chwData, [1, 3, 512, 512])` → `session.run({ input: tensor })`
+- 后处理：输出张量反归一化 → Uint8Array `[0, 255]` → `sharp` 缩放回原始尺寸（从 metadata 自动检测）→ PNG Buffer
+- 30s 超时保护 + 错误消息回传
 
 ### src/workers/path-extraction/worker.ts (占位)
 OpenCV.js 路径提取 Worker。后续将: 二值化 + findContours + approxPolyDP + 排序。
+
+### src/main/worker-manager.ts
+Worker 生命周期管理器 — 阶段 5 新增：
+- `runInference(modelPath, imageBuffer): Promise<Buffer>` 单次推理接口
+- 创建 Worker（`new URL('../../workers/inference/worker.js', import.meta.url)` + `workerData: { modelPath }`）
+- 等待 `{ type: 'result', lineArtBuffer }` 或 `{ type: 'error', message }` → terminate Worker
+- 30s 超时自动 `worker.terminate()` + reject
+- error / messageerror 事件兜底清理
+
+### src/main/pipeline-orchestrator.ts
+管线编排器 — 阶段 5 新增：
+- `createPipelineOrchestrator({ modelPath, getContext, getMainWindow, stateMachine })` 工厂函数
+- `run(imageBuffer)` 编排完整推理流程：
+  1. 推送 `pipeline-progress`（stage: 'inference', progress: 0）
+  2. 调用 `runInference()` 执行推理
+  3. 存储 `lineArtBuffer` / `lineArtBase64` 到 AppContext
+  4. 推送 `pipeline-progress`（progress: 100）+ `pipeline-complete`（lineArtBase64, pathCount: 0, boundingBox: null）
+  5. 状态机转 `IDLE` → 推送 `APP_STATE` + 成功 Toast
+- 推理失败 → 状态机转 `ERROR` → 推送 `APP_ERROR` + `APP_STATE` + 错误 Toast
+- 通过 `IpcHandlerDeps.runPipeline` 注入到 IPC 层，在 `IMPORT_IMAGE` 成功后自动触发
 
 ## 已知问题
 
@@ -345,6 +373,9 @@ OpenCV.js 路径提取 Worker。后续将: 二值化 + findContours + approxPoly
 - **`session.defaultSession` 是静态成员**：不能通过 `win.webContents.session.defaultSession`（实例）访问，必须通过 `import { session } from 'electron'; session.defaultSession` 静态访问。
 - **Electron sandbox 下 `File.path` 不可用**：渲染进程沙箱（`sandbox: true`，Electron 20+ 默认开启）中 `<input type="file">` 选择的文件无 `path` 属性。阶段 4 通过 `FileReader.readAsDataURL()` 在渲染进程直接读取文件内容绕过此限制。
 - **CSP 阻止 data: URL 图片**：`default-src 'self'` 不包含 `data:` 协议，通过 IPC 传递的 base64 data URL 被浏览器阻止渲染。解决：显式添加 `img-src 'self' data:`。
+- **Preload 必须 `.cjs` 扩展名**：`package.json` 的 `"type": "module"` 导致 Electron 将 `.js` 文件以 ESM 解析，preload 中 `require('electron')` 抛出 `SyntaxError: Cannot use import statement outside a module`。解决：`build-main.mjs` 将 preload 单独构建为 CJS 格式 + `.cjs` 扩展名，绕过 type 声明。
+- **Worker 非打包模式**：esbuild `bundle: true` 将 CJS 依赖（sharp、onnxruntime-node）包裹在 `__require()` 中，`require` 在 ESM Worker 中不可用。解决：`build-workers.mjs` 改为 `bundle: false`，保留原生 `import` 语句由 Node.js 解析。
+- **Electron 沙箱须关闭**：默认 `sandbox: true` 导致 `<input type="file">` 的 `File.path` 始终为 `undefined`，图片数据只能通过 FileReader 在渲染进程读取。解决：`webPreferences` 设置 `sandbox: false`，恢复 `file.path` 可用。
 
 ## 模块系统约束
 
@@ -357,8 +388,44 @@ OpenCV.js 路径提取 Worker。后续将: 二值化 + findContours + approxPoly
 ├── 相对导入 (Renderer) → 可省略后缀 (Vite bundler 自动解析)
 ├── __dirname/__filename → import.meta.url + fileURLToPath
 ├── Worker 创建 → new Worker(new URL('...', import.meta.url))
-└── CJS 依赖 (仅 nut-js) → src/main/adapters/ 下 createRequire 桥接
+├── CJS 依赖 (仅 nut-js) → src/main/adapters/ 下 createRequire 桥接
+├── Preload 构建 → 必须 .cjs 扩展名（CJS 格式），不可用 ESM
+└── Worker 构建 → bundle: false，保留 import 语句由 Node.js 原生 CJS→ESM 互操作
 ```
+
+## 关键架构洞察
+
+### 图片导入双路径
+
+AKD 支持两种图片导入方式，分别对应不同的数据流：
+
+| 路径 | 触发方式 | 数据流 | 使用场景 |
+|------|---------|--------|---------|
+| 文件路径导入 | 拖拽（有 `file.path`）或未来对话框 | IPC `importImage(filePath)` → `handleImportImage` 读磁盘 → Buffer → 管线 | Electron 非沙箱、拖拽 |
+| Base64 导入 | 点击选文件、拖拽（无 path） | FileReader → data URL → IPC `importImage(dataUrl)` → `handleImportImageFromBase64` 解码 → Buffer → 管线 | Electron 沙箱、文件选择器 |
+
+两种路径在 `ipc-handlers.ts` 的 `IMPORT_IMAGE` handler 中自动路由：`input.startsWith('data:')` 判断前缀。
+
+### IPC 监听器三层同步规则
+
+新增一个从 Main→Renderer 的 IPC 事件需要修改**恰好 3 个文件**：
+
+| 层 | 文件 | 操作 |
+|----|------|------|
+| 桥接层 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld` 新增方法，调用 `ipcRenderer.on(CHANNEL, callback)` |
+| 类型层 | `src/renderer/env.d.ts` | `ElectronAPI` 接口新增方法签名 |
+| 消费层 | Vue 组件 | `onMounted` 中调用 `window.electronAPI.onXxx(callback)` |
+
+如果消费层在 `ImagePanel.vue` 等 `<KeepAlive>` 缓存的组件中，监听器在 `onMounted` 注册一次即可，无需在 `onUnmounted` 清理（`KeepAlive` 不会销毁组件）。
+
+### 构建系统分离
+
+| 构件 | 格式 | 扩展名 | 原因 |
+|------|------|--------|------|
+| Main Process | ESM | `.js` | Node.js 以 ESM 加载主进程入口 |
+| Preload | CJS | `.cjs` | 绕过 `"type": "module"`，Electron preload 需要 CJS |
+| Workers | ESM | `.js` | `worker_threads` 加载，Node.js 原生 CJS→ESM 互操作 |
+| Renderer | ESM | `.js` | Vite 打包，浏览器 ESM |
 
 ## 依赖注入架构
 

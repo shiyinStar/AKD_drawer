@@ -4,11 +4,19 @@ import { fileURLToPath } from 'node:url'
 import { createAppContext } from './app-context.js'
 import type { AppContext } from './app-context.js'
 import { registerIpcHandlers } from './ipc-handlers.js'
+import { createPipelineOrchestrator } from './pipeline-orchestrator.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 let ctx: AppContext
+
+function resolveModelPath(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'models', 'anime2sketch.onnx')
+  }
+  return join(__dirname, '..', '..', 'resources', 'models', 'anime2sketch.onnx')
+}
 
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -19,7 +27,8 @@ function createMainWindow(): BrowserWindow {
     frame: false,
     show: false,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/index.cjs'),
+      sandbox: false,
     },
   })
 
@@ -54,10 +63,18 @@ app.whenReady().then(() => {
   const win = createMainWindow()
   ctx.mainWindow = win
 
+  const pipeline = createPipelineOrchestrator({
+    modelPath: resolveModelPath(),
+    getContext: () => ctx,
+    getMainWindow: () => ctx.mainWindow,
+    stateMachine: ctx.stateMachine,
+  })
+
   registerIpcHandlers({
     getState: () => ctx.stateMachine.getState(),
     getMainWindow: () => ctx.mainWindow,
     getContext: () => ctx,
+    runPipeline: (buffer: Buffer) => pipeline.run(buffer),
   })
 })
 

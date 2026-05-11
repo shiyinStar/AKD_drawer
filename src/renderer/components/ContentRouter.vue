@@ -15,10 +15,12 @@ const panels: Record<string, unknown> = {
 <template>
   <main class="content-router">
     <Transition name="panel" mode="out-in">
-      <component
-        :is="panels[activePanel] ?? SettingsPanel"
-        :key="activePanel"
-      />
+      <KeepAlive>
+        <component
+          :is="panels[activePanel] ?? SettingsPanel"
+          :key="activePanel"
+        />
+      </KeepAlive>
     </Transition>
   </main>
 </template>

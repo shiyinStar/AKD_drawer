@@ -67,3 +67,9 @@ export interface ToastMessage {
   message: string
   duration?: number
 }
+
+export interface PipelineCompleteData {
+  lineArtBase64: string
+  pathCount: number
+  boundingBox: BoundingBox | null
+}

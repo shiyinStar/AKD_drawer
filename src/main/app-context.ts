@@ -13,6 +13,8 @@ export interface AppContext {
   imagePath: string | null
   width: number
   height: number
+  lineArtBuffer: Buffer | null
+  lineArtBase64: string | null
 }
 
 export function createAppContext(): AppContext {
@@ -28,5 +30,7 @@ export function createAppContext(): AppContext {
     imagePath: null,
     width: 0,
     height: 0,
+    lineArtBuffer: null,
+    lineArtBase64: null,
   }
 }

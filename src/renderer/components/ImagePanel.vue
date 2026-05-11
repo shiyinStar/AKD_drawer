@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import ImageDropZone from './ImageDropZone.vue'
 import ImageCompare from './ImageCompare.vue'
 import PanelToolbar from './PanelToolbar.vue'
@@ -10,10 +10,13 @@ const lineArtSrc = ref<string | null>(null)
 const isProcessing = ref(false)
 const dropZoneRef = ref<InstanceType<typeof ImageDropZone> | null>(null)
 
+const hasLineArt = computed(() => lineArtSrc.value !== null)
+
 async function onFileSelected(result: { filePath: string; dataUrl?: string }) {
   if (result.dataUrl) {
     originalSrc.value = result.dataUrl
     hasImage.value = true
+    isProcessing.value = true
   }
 }
 
@@ -21,16 +24,36 @@ async function onImportClick() {
   hasImage.value = false
   originalSrc.value = null
   lineArtSrc.value = null
+  isProcessing.value = false
   await nextTick()
   dropZoneRef.value?.openFilePicker()
 }
+
+async function onExportClick() {
+  try {
+    await window.electronAPI.exportLineArt()
+  } catch {
+    // IPC 未实现
+  }
+}
+
+onMounted(() => {
+  window.electronAPI.onPipelineComplete((data) => {
+    if (data.lineArtBase64) {
+      lineArtSrc.value = `data:image/png;base64,${data.lineArtBase64}`
+    }
+    isProcessing.value = false
+  })
+})
 </script>
 
 <template>
   <div class="image-panel">
     <PanelToolbar
       :hasImage="hasImage"
+      :hasLineArt="hasLineArt"
       @import="onImportClick"
+      @export="onExportClick"
     />
     <div class="image-panel__content">
       <ImageDropZone

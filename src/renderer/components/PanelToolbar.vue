@@ -3,10 +3,12 @@ import { Download, Upload } from 'lucide-vue-next'
 
 defineProps<{
   hasImage: boolean
+  hasLineArt: boolean
 }>()
 
 defineEmits<{
   import: []
+  export: []
 }>()
 </script>
 
@@ -16,7 +18,11 @@ defineEmits<{
       <Download :size="16" stroke-width="1.5" />
       <span>导入图片</span>
     </button>
-    <button class="btn btn--secondary" :disabled="!hasImage">
+    <button
+      class="btn btn--secondary"
+      :disabled="!hasLineArt"
+      @click="$emit('export')"
+    >
       <Upload :size="16" stroke-width="1.5" />
       <span>导出线稿 PNG</span>
     </button>
@@ -60,10 +66,23 @@ defineEmits<{
   transform: translateY(-1px);
 }
 
+.btn--primary:active {
+  transform: scale(0.97);
+}
+
 .btn--secondary {
   border: 1px solid var(--color-primary-500);
   background: transparent;
   color: var(--color-primary-500);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.08);
+  transform: translateY(-1px);
+}
+
+.btn--secondary:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .btn--secondary:disabled {

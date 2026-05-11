@@ -10,6 +10,10 @@ const VITE_URL = 'http://localhost:5173'
 console.log('[dev] Building main process...')
 execSync('node scripts/build-main.mjs', { cwd: root, stdio: 'inherit' })
 
+// 构建 Workers（推理 Worker 由主进程通过 worker_threads 加载）
+console.log('[dev] Building workers...')
+execSync('node scripts/build-workers.mjs', { cwd: root, stdio: 'inherit' })
+
 const vite = spawn('npx', ['vite'], {
   cwd: root,
   stdio: 'inherit',

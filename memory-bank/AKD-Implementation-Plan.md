@@ -638,8 +638,7 @@
 
 ### 步骤 5.1 — 模型文件部署
 
-- 创建 `resources/models/` 目录
-- 将 `anime2sketch.onnx` 模型文件放入该目录
+- 读取 `resources/models目录中的 `anime2sketch.onnx` 模型文件
 - 在 `package.json` 中配置 `build.extraResources` 包含 `resources/models/*`
 
 **验证**：

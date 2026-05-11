@@ -27,6 +27,11 @@ interface ElectronAPI {
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>
   windowClose(): Promise<void>
+  onPipelineComplete(
+    callback: (
+      data: import('../shared/types.js').PipelineCompleteData,
+    ) => void,
+  ): void
   onToast(
     callback: (toast: import('../shared/types.js').ToastMessage) => void,
   ): void

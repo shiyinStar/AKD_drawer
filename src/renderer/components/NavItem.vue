@@ -35,11 +35,17 @@ defineEmits<{
   color: var(--color-surface-500);
   cursor: pointer;
   position: relative;
-  transition: color var(--duration-fast) var(--ease-out);
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 
 .nav-item:hover {
   color: var(--color-surface-700);
+}
+
+.nav-item:active {
+  transform: scale(0.92);
 }
 
 .nav-item.active {

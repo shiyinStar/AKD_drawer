@@ -1,5 +1,8 @@
 import * as esbuild from 'esbuild'
 
+// Workers 使用非打包模式：esbuild 仅编译 TypeScript → JavaScript，
+// import 语句原样保留，由 Node.js 原生解析（处理 CJS→ESM 互操作）。
+// bundle: true 会将 CJS 依赖包裹在 __require() 中，与 ESM Worker 不兼容。
 await esbuild.build({
   entryPoints: [
     'src/workers/inference/worker.ts',
@@ -8,22 +11,8 @@ await esbuild.build({
   format: 'esm',
   platform: 'node',
   target: 'node20',
-  bundle: true,
+  bundle: false,
   sourcemap: true,
-  outdir: 'dist/workers',
-  external: [
-    'onnxruntime-node',
-    '@techstark/opencv-js',
-    'node:worker_threads',
-    'node:fs',
-    'node:fs/promises',
-    'node:path',
-    'node:url',
-    'node:os',
-    'node:crypto',
-    'node:events',
-    'node:util',
-    'node:stream',
-    'node:stream/promises',
-  ],
+  outdir: 'dist',
+  outbase: 'src',
 })

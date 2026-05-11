@@ -67,10 +67,13 @@ async function onDrop(e: DragEvent) {
 function readAndEmit(file: File) {
   const reader = new FileReader()
   reader.onload = () => {
+    const dataUrl = reader.result as string
     emit('file-selected', {
       filePath: file.name,
-      dataUrl: reader.result as string,
+      dataUrl,
     })
+    // 将图片数据发送到主进程以触发推理管线
+    window.electronAPI.importImage(dataUrl)
   }
   reader.readAsDataURL(file)
 }
