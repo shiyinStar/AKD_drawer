@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-11 (阶段 2 完成)
+**最后更新**: 2026-05-11 (阶段 3 完成，含 bug 修复)
 
 ---
 
@@ -132,15 +132,110 @@
 | 源码 `require()` 检查 | 0 匹配 |
 | Node 内置模块 `node:` 协议 | 全部合规 |
 
-## 下一步：阶段 3 — 渲染进程 UI 骨架
+## 阶段 3：渲染进程 UI 骨架 ✅ 完成
 
-- 步骤 3.1: 全局 CSS 变量与主题
-- 步骤 3.2: 自定义标题栏组件
-- 步骤 3.3: 左侧导航栏组件
-- 步骤 3.4: 状态栏组件
-- 步骤 3.5: App.vue 整体布局
-- 步骤 3.6: 内容路由切换
-- 步骤 3.7: 图片面板：空状态与拖拽区
+### 步骤 3.1 — 全局 CSS 变量与主题 ✅
+- `src/renderer/styles/tokens.css`：完整 CSS 自定义属性系统
+  - 颜色：主色（靛蓝紫）、暗色表面 9 阶、语义色、叠加层色、毛玻璃色
+  - 排版：`--font-ui`（Inter + 微软雅黑 + 苹方）、`--font-mono`（JetBrains Mono + Cascadia Code + Consolas）
+  - 间距：4px 基准 7 级等比（4/8/12/16/24/32/48）
+  - 圆角：4/6/8/12px
+  - 动画：4 种缓动函数 + 4 级时长
+  - `[data-theme="light"]` 亮色主题颜色反转
+  - `@keyframes status-pulse`（NOT_READY 2s / DRAWING 1s）、`@keyframes status-glow`（PREVIEWING 3s）
+- `src/renderer/styles/typography.css`：工具类 `.text-body`/`.text-caption`/`.text-mono`/`.text-heading`
+- `src/renderer/styles/global.css` 更新：
+  - `@import` tokens.css 和 typography.css
+  - 所有硬编码颜色/字体替换为 CSS 变量
+  - 添加暗色滚动条样式、选中文本高亮
+
+### 步骤 3.2 — 自定义标题栏 + 窗口控制 IPC ✅
+- `src/renderer/components/TitleBar.vue`：
+  - 高度 32px，`-webkit-app-region: drag` 可拖拽
+  - 左侧 "AKD" 标签（12px），右侧三个窗口控制按钮
+  - 按钮使用 lucide-vue-next 图标：Minus / Square / X（16px, stroke-width 1.5）
+  - 关闭按钮 hover 红色背景，双击标题栏切换最大化
+- 新增 3 个 IPC 通道（`WINDOW_MINIMIZE`/`WINDOW_MAXIMIZE`/`WINDOW_CLOSE`）到 `types.ts`
+- 更新 `preload/index.ts`：暴露 `windowMinimize`/`windowMaximize`/`windowClose`
+- 更新 `env.d.ts`：添加对应 TypeScript 类型
+- 更新 `ipc-handlers.ts`：新增 `getMainWindow` 依赖 + 3 个 handler
+- 更新 `main/index.ts`：窗口 `frame: false`（无框窗口）+ `minWidth: 720`/`minHeight: 480`
+
+### 步骤 3.3 — 左侧导航栏 ✅
+- `src/renderer/components/NavItem.vue`：48×48px 按钮，20×20px 图标
+  - 激活态：左侧 2px 主色竖条 + 图标变主色
+  - hover 态：图标颜色变亮
+  - title 属性 tooltip
+- `src/renderer/components/SideNav.vue`：
+  - 固定 48px 宽，上下分区（顶部 Image/Settings，底部 Info）
+  - 接收 `activePanel` prop + emit `update:activePanel`
+
+### 步骤 3.4 — 状态栏 ✅
+- `src/renderer/components/StatusBar.vue`：28px 高，flex-shrink: 0
+  - 左侧 slot `indicator`（状态指示灯占位）
+  - 右侧 slot `tasks`（后台任务占位）
+
+### 步骤 3.5 — App.vue 整体布局 ✅
+- 完整四区域布局：`TitleBar`(32px) → `SideNav`(48px) + `ContentRouter`(flex) → `StatusBar`(28px)
+- `activePanel` 状态管理（`ref<string>`，默认 `'image'`）
+- `data-theme="dark"` 绑定
+- Flexbox 纵向布局，内容区横向
+
+### 步骤 3.6 — 内容路由切换 ✅
+- `src/renderer/components/ContentRouter.vue`：
+  - 基于 `activePanel` prop 动态渲染 `<component :is="...">`
+  - `image` → ImagePanel, `settings` → SettingsPanel
+  - `<Transition name="panel">` 250ms 淡入淡出
+- `src/renderer/components/SettingsPanel.vue`：占位组件，显示 "设置"
+
+### 步骤 3.7 — 图片面板：空状态与拖拽区 ✅
+- `src/renderer/components/ImagePanel.vue`：
+  - `hasImage` ref 驱动布局切换
+  - **未导入图片**：整块 `ImageDropZone` 铺满内容区（单一完整矩形区域）
+  - **已导入图片**：左右双栏，各显示 placeholder（"原图"/"线稿" + Image 图标）
+  - 工具栏"导入图片"按钮 → 重置 `hasImage = false` → 切回整块拖拽区重新导入
+- `src/renderer/components/ImageDropZone.vue`：
+  - 虚线边框 + ImagePlus 48px 图标 + 提示文字
+  - `dragover` → 仅判断 `types.includes('Files')`，文件拖拽统一蓝色边框（浏览器安全限制，dragover 时拿不到文件名）
+  - `drop` → 通过 `file.name` 校验扩展名，不合法才显示红色边框 300ms 闪烁
+  - 校验通过后调用 `window.electronAPI.importImage()` + `emit('file-selected', filePath)`
+  - 隐藏 `<input type="file">` 支持点击选文件
+- `src/renderer/components/PanelToolbar.vue`：40px 高，**位于内容区顶部**（border-bottom 分隔线）
+  - `hasImage` prop 控制导出按钮 disabled 态（无图片时灰色不可点击）
+  - `import` emit 通知父组件触发重新导入
+  - [导入图片] 主按钮（主色填充、hover 上浮 1px，Download 图标）
+  - [导出线稿 PNG] 次按钮（Upload 图标）
+
+### 阶段 3 Bug 修复记录
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| 拖拽任何格式都蓝框，不支持格式不红框 | `onDragOver` 用 `item.type`（MIME 如 `image/png`）匹配 `isValidFile()`（检查扩展名如 `.png`），永久不匹配；`types.every()` 逻辑也写反了 | 改为 `types.includes('Files')` 仅判断是否文件拖拽；扩展名校验移至 `drop` 事件中用 `file.name` 判断 |
+| 导入前后布局不变 | 未实现 | `ImagePanel` 加 `hasImage` 状态驱动 `v-if`/`v-else` 切换整块拖拽区 ↔ 双栏布局 |
+| 窗口可无限缩小至 1px | `main/index.ts` 中 `minWidth`/`minHeight` 未设上（之前编辑被后续编辑覆盖） | 补充 `minWidth: 720`、`minHeight: 480`、`frame: false` 到 BrowserWindow 构造参数 |
+
+### UI 调整记录
+| 调整 | 说明 |
+|------|------|
+| 工具栏移至顶部 | `PanelToolbar` 从内容区底部移到顶部，边框从 `border-top` 改为 `border-bottom` |
+| 按钮图标互换 | 导入按钮改用 Download 图标，导出按钮改用 Upload 图标 |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx vite build` | 构建成功，1523 模块 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| 源码 `require()` 检查 | 0 匹配 |
+
+## 下一步：阶段 4 — 图片导入与 IPC 数据流
+
+- 步骤 4.1: 图片导入 Handler（Main Process）
+- 步骤 4.2: 图片面板：双图对比展示
+- 步骤 4.3: 状态指示灯组件完整实现
+- 步骤 4.4: Toast 通知组件
 
 ---
 

@@ -14,6 +14,9 @@ function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 960,
     height: 680,
+    minWidth: 720,
+    minHeight: 480,
+    frame: false,
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -53,6 +56,7 @@ app.whenReady().then(() => {
 
   registerIpcHandlers({
     getState: () => ctx.stateMachine.getState(),
+    getMainWindow: () => ctx.mainWindow,
   })
 })
 

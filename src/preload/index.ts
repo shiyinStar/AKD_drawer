@@ -44,4 +44,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   exportLineArt: (): Promise<unknown> =>
     ipcRenderer.invoke('export-lineart'),
+
+  windowMinimize: (): Promise<void> =>
+    ipcRenderer.invoke(IPC_CHANNELS.WINDOW_MINIMIZE),
+
+  windowMaximize: (): Promise<void> =>
+    ipcRenderer.invoke(IPC_CHANNELS.WINDOW_MAXIMIZE),
+
+  windowClose: (): Promise<void> =>
+    ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CLOSE),
 })

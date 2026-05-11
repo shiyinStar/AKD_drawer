@@ -54,4 +54,7 @@ export const IPC_CHANNELS = {
   UPDATE_SETTINGS: 'update-settings',
   APP_STATE: 'app-state',
   OVERLAY_SCALE_CHANGED: 'overlay-scale-changed',
+  WINDOW_MINIMIZE: 'window-minimize',
+  WINDOW_MAXIMIZE: 'window-maximize',
+  WINDOW_CLOSE: 'window-close',
 } as const

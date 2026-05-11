@@ -24,6 +24,9 @@ interface ElectronAPI {
   retryFromError(): Promise<unknown>
   updateSettings(partialSettings: Record<string, unknown>): Promise<unknown>
   exportLineArt(): Promise<unknown>
+  windowMinimize(): Promise<void>
+  windowMaximize(): Promise<void>
+  windowClose(): Promise<void>
 }
 
 declare global {
