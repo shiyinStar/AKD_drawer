@@ -57,4 +57,13 @@ export const IPC_CHANNELS = {
   WINDOW_MINIMIZE: 'window-minimize',
   WINDOW_MAXIMIZE: 'window-maximize',
   WINDOW_CLOSE: 'window-close',
+  SHOW_TOAST: 'show-toast',
+  GET_IMAGE_DATA: 'get-image-data',
+  OPEN_FILE_DIALOG: 'open-file-dialog',
 } as const
+
+export interface ToastMessage {
+  type: 'success' | 'warning' | 'error' | 'info'
+  message: string
+  duration?: number
+}

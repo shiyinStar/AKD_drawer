@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { StatusState, PipelineProgress, ErrorInfo } from '../shared/types.js'
+import type { StatusState, PipelineProgress, ErrorInfo, ToastMessage } from '../shared/types.js'
 import { IPC_CHANNELS } from '../shared/types.js'
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -53,4 +53,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   windowClose: (): Promise<void> =>
     ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CLOSE),
+
+  onToast: (callback: (toast: ToastMessage) => void): void => {
+    ipcRenderer.on(IPC_CHANNELS.SHOW_TOAST, (_event, toast: ToastMessage) =>
+      callback(toast),
+    )
+  },
+
+  getImageData: (): Promise<unknown> =>
+    ipcRenderer.invoke(IPC_CHANNELS.GET_IMAGE_DATA),
+
+  openFileDialog: (): Promise<string | null> =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILE_DIALOG),
 })

@@ -1,10 +1,14 @@
-import { spawn } from 'node:child_process'
+import { spawn, execSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')
 const VITE_URL = 'http://localhost:5173'
+
+// 先构建 Main Process + Preload（确保 IPC handler 等主进程改动生效）
+console.log('[dev] Building main process...')
+execSync('node scripts/build-main.mjs', { cwd: root, stdio: 'inherit' })
 
 const vite = spawn('npx', ['vite'], {
   cwd: root,

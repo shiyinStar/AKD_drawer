@@ -1,20 +1,28 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { Image } from 'lucide-vue-next'
+import { ref, nextTick } from 'vue'
 import ImageDropZone from './ImageDropZone.vue'
+import ImageCompare from './ImageCompare.vue'
 import PanelToolbar from './PanelToolbar.vue'
 
 const hasImage = ref(false)
+const originalSrc = ref<string | null>(null)
+const lineArtSrc = ref<string | null>(null)
+const isProcessing = ref(false)
 const dropZoneRef = ref<InstanceType<typeof ImageDropZone> | null>(null)
 
-function onFileSelected(_filePath: string) {
-  hasImage.value = true
+async function onFileSelected(result: { filePath: string; dataUrl?: string }) {
+  if (result.dataUrl) {
+    originalSrc.value = result.dataUrl
+    hasImage.value = true
+  }
 }
 
-function onImportClick() {
-  // 触发 ImageDropZone 中的文件选择器
-  // 当 hasImage 为 true 时需要重新渲染 drop zone，这里直接重置状态
+async function onImportClick() {
   hasImage.value = false
+  originalSrc.value = null
+  lineArtSrc.value = null
+  await nextTick()
+  dropZoneRef.value?.openFilePicker()
 }
 </script>
 
@@ -25,27 +33,17 @@ function onImportClick() {
       @import="onImportClick"
     />
     <div class="image-panel__content">
-      <!-- 未导入：整块拖拽区 -->
       <ImageDropZone
         v-if="!hasImage"
         ref="dropZoneRef"
         @file-selected="onFileSelected"
       />
-      <!-- 已导入：左右双栏 -->
-      <template v-else>
-        <div class="image-panel__col image-panel__col--left">
-          <div class="image-panel__placeholder">
-            <Image :size="32" stroke-width="1.5" class="image-panel__placeholder-icon" />
-            <span class="image-panel__placeholder-label">原图</span>
-          </div>
-        </div>
-        <div class="image-panel__col image-panel__col--right">
-          <div class="image-panel__placeholder">
-            <Image :size="32" stroke-width="1.5" class="image-panel__placeholder-icon" />
-            <span class="image-panel__placeholder-label">线稿</span>
-          </div>
-        </div>
-      </template>
+      <ImageCompare
+        v-else
+        :originalSrc="originalSrc"
+        :lineArtSrc="lineArtSrc"
+        :loading="isProcessing"
+      />
     </div>
   </div>
 </template>
@@ -62,32 +60,5 @@ function onImportClick() {
   display: flex;
   flex: 1;
   overflow: hidden;
-}
-
-.image-panel__col {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.image-panel__col--left {
-  border-right: 1px solid var(--color-surface-300);
-}
-
-.image-panel__placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.image-panel__placeholder-icon {
-  color: var(--color-surface-400);
-}
-
-.image-panel__placeholder-label {
-  font-size: 13px;
-  color: var(--color-surface-500);
 }
 </style>

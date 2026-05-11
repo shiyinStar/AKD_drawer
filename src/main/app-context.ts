@@ -9,6 +9,10 @@ export interface AppContext {
   stateMachine: StateMachine
   configStore: ConfigStoreType
   mainWindow: BrowserWindow | null
+  imageBuffer: Buffer | null
+  imagePath: string | null
+  width: number
+  height: number
 }
 
 export function createAppContext(): AppContext {
@@ -20,5 +24,9 @@ export function createAppContext(): AppContext {
     stateMachine,
     configStore,
     mainWindow: null,
+    imageBuffer: null,
+    imagePath: null,
+    width: 0,
+    height: 0,
   }
 }

@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-11 (阶段 3 完成，含 bug 修复)
+**最后更新**: 2026-05-11 (阶段 4 完成)
 
 ---
 
@@ -230,12 +230,80 @@
 | `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
 | 源码 `require()` 检查 | 0 匹配 |
 
-## 下一步：阶段 4 — 图片导入与 IPC 数据流
+## 阶段 4：图片导入与 IPC 数据流 ✅ 完成
 
-- 步骤 4.1: 图片导入 Handler（Main Process）
-- 步骤 4.2: 图片面板：双图对比展示
-- 步骤 4.3: 状态指示灯组件完整实现
-- 步骤 4.4: Toast 通知组件
+### 步骤 4.1 — 图片导入 Handler（Main Process） ✅
+- `src/main/image-import-handler.ts`：文件校验 + 图片导入核心逻辑
+  - 扩展名白名单（.png/.jpg/.jpeg/.webp/.bmp）+ magic bytes 双重校验
+  - WebP 独立校验：RIFF 头 + WEBP 标识
+  - `handleImportImage(filePath, ctx)` → `access` → `readFile` → `validateFormat` → 存储 `ctx.imageBuffer`/`ctx.imagePath` → 返回 `{ success, dataUrl, fileName }`
+- `src/main/app-context.ts` 扩展：`AppContext` 新增 `imageBuffer: Buffer | null`、`imagePath: string | null`、`width: number`、`height: number`
+- `src/main/ipc-handlers.ts` 更新：
+  - `IMPORT_IMAGE` handler 改为调用 `handleImportImage`，成功后推送 `SHOW_TOAST` 和 `APP_STATE`
+  - 新增 `GET_IMAGE_DATA` handler、`OPEN_FILE_DIALOG` handler
+  - `IpcHandlerDeps` 新增 `getContext`
+- `src/main/index.ts`：`registerIpcHandlers` 传入 `getContext`；CSP 新增 `img-src 'self' data:`
+- `src/shared/types.ts`：新增 `SHOW_TOAST`、`GET_IMAGE_DATA`、`OPEN_FILE_DIALOG` 通道 + `ToastMessage` 接口
+- `src/preload/index.ts`：新增 `onToast`、`getImageData`、`openFileDialog`
+- `src/renderer/env.d.ts`：对应类型声明
+- **测试**：`tests/unit/image-import-handler.test.ts` — 8 用例（合法 PNG/JPG、不存在文件、不支持扩展名、magic bytes 失败、失败不污染 context）
+
+### 步骤 4.2 — 图片面板：双图对比展示 ✅
+- `src/renderer/components/ImageViewer.vue`：可缩放拖拽的图片查看器
+  - 滚轮缩放 10%~200%（`CSS transform: scale()`）
+  - 缩放 > 1x 后按住鼠标拖拽平移（`translate`，移动量按缩放比修正）
+  - 三种状态：骨架屏（shimmer）→ 空状态 → 图片显示
+  - 光标：grab/grabbing，右下角缩放比例指示器
+- `src/renderer/components/ImageCompare.vue`：左右双栏布局 + 中间分隔线
+- `src/renderer/components/ImagePanel.vue` 重构：`v-if` 切换拖拽区 ↔ 双图对比；`nextTick` + `openFilePicker()` 实现按钮一键导入
+- `src/renderer/components/ImageDropZone.vue` 重构：
+  - 文件选择器 → `<input type="file">` → `FileReader.readAsDataURL()` 在渲染进程读取
+  - 拖拽 → `file.path`（如可用）→ IPC 导入；不可用则 fallback 到 `FileReader`
+  - `defineExpose({ openFilePicker })` 供父组件调用
+- `scripts/dev.ts`：启动 Vite 前自动 `execSync('node scripts/build-main.mjs')`
+
+### 步骤 4.3 — 状态指示灯组件完整实现 ✅
+- `src/renderer/components/StatusIndicator.vue`：5 状态完整映射
+  - 结构：`[● 8px圆点] [Lucide图标 16px] [标签 12px] | [附加信息 12px]`
+  - 动画：pulse（NOT_READY 2s / DRAWING 1s）、glow（PREVIEWING 3s）、none（IDLE/ERROR）
+  - 颜色通过根节点 style binding 驱动，子元素 `currentColor` 继承
+  - `role="status"` + `aria-live` 无障碍
+- `src/renderer/App.vue`：`appStatus` + `statusExtra` ref，IPC 监听状态变更
+
+### 步骤 4.4 — Toast 通知组件 ✅
+- `src/renderer/components/ToastItem.vue`：单条 Toast，毛玻璃 + 左侧类型色条 + 滑入/淡出动画
+- `src/renderer/components/ToastContainer.vue`：右下角固定定位，`TransitionGroup`，队列上限 3
+- `src/renderer/App.vue`：`toasts` ref 队列管理 + IPC `onToast` 监听
+- 调试 API：`__akdDebug.setStatus(state, extra?)` / `__akdDebug.toast(type, message)`
+
+### 阶段 4 Bug 修复记录
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| 导入图片后原图不显示 | CSP `default-src 'self'` 不包含 `data:` 协议 | 添加 `img-src 'self' data:` |
+| `npm run dev` 主进程改动不生效 | `dev.ts` 未构建 Main Process | 启动 Vite 前自动 `build-main.mjs` |
+| 按钮"导入图片"无效 | `onImportClick` 只重置状态未触发文件选择器 | `nextTick` + `dropZoneRef.openFilePicker()` |
+| 文件选择器选文件后无反应 | Electron sandbox 下 `File.path` 为 `undefined` | `FileReader.readAsDataURL()` 渲染进程读取 |
+| 原对话框方案无法呼出 | `dialog.showOpenDialog` 在无框窗口下异常 | 回退 `<input type="file">` + `FileReader` |
+
+### UI 调整记录
+| 调整 | 说明 |
+|------|------|
+| Toast 位置 | 右上角 → 右下角（`bottom: 12px`） |
+| 图片平移 | 缩放 > 1x 后支持按住拖拽平移 |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `npx vite build` | 构建成功 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 8/8 通过 |
+| 源码 `require()` 检查 | 0 匹配 |
+
+## 下一步：阶段 5 — 推理管线
 
 ---
 

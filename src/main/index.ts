@@ -29,7 +29,7 @@ function createMainWindow(): BrowserWindow {
         responseHeaders: {
           ...details.responseHeaders,
           'Content-Security-Policy': [
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:",
           ],
         },
       })
@@ -57,6 +57,7 @@ app.whenReady().then(() => {
   registerIpcHandlers({
     getState: () => ctx.stateMachine.getState(),
     getMainWindow: () => ctx.mainWindow,
+    getContext: () => ctx,
   })
 })
 

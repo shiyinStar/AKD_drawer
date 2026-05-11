@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { ImagePlus } from 'lucide-vue-next'
 
 const emit = defineEmits<{
-  'file-selected': [filePath: string]
+  'file-selected': [result: { filePath: string; dataUrl?: string }]
 }>()
 
 const isDragOver = ref(false)
@@ -32,7 +32,7 @@ function onDragLeave() {
   isInvalidFile.value = false
 }
 
-function onDrop(e: DragEvent) {
+async function onDrop(e: DragEvent) {
   e.preventDefault()
   isDragOver.value = false
   isInvalidFile.value = false
@@ -48,29 +48,50 @@ function onDrop(e: DragEvent) {
     return
   }
 
-  const filePath = (file as { path?: string }).path ?? ''
+  const filePath = (file as { path?: string }).path
   if (filePath) {
-    window.electronAPI.importImage(filePath)
-    emit('file-selected', filePath)
+    // 拖拽文件：通过 path 走主进程导入
+    const result = (await window.electronAPI.importImage(filePath)) as {
+      success: boolean
+      dataUrl?: string
+    }
+    if (result.success) {
+      emit('file-selected', { filePath, dataUrl: result.dataUrl })
+    }
+  } else {
+    // 备用：FileReader 直接读取
+    readAndEmit(file)
   }
 }
 
-function onClick() {
-  fileInput.value?.click()
+function readAndEmit(file: File) {
+  const reader = new FileReader()
+  reader.onload = () => {
+    emit('file-selected', {
+      filePath: file.name,
+      dataUrl: reader.result as string,
+    })
+  }
+  reader.readAsDataURL(file)
 }
 
-function onFileChange(e: Event) {
+async function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-
-  const filePath = (file as { path?: string }).path ?? ''
-  if (filePath) {
-    window.electronAPI.importImage(filePath)
-    emit('file-selected', filePath)
-  }
+  readAndEmit(file)
   input.value = ''
 }
+
+function openFilePicker() {
+  fileInput.value?.click()
+}
+
+function onClick() {
+  openFilePicker()
+}
+
+defineExpose({ openFilePicker })
 </script>
 
 <template>

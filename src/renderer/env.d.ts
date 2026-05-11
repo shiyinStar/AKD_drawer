@@ -27,6 +27,11 @@ interface ElectronAPI {
   windowMinimize(): Promise<void>
   windowMaximize(): Promise<void>
   windowClose(): Promise<void>
+  onToast(
+    callback: (toast: import('../shared/types.js').ToastMessage) => void,
+  ): void
+  getImageData(): Promise<unknown>
+  openFileDialog(): Promise<string | null>
 }
 
 declare global {
