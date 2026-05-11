@@ -1,9 +1,14 @@
 import { app, BrowserWindow, session } from 'electron'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createAppContext } from './app-context.js'
+import type { AppContext } from './app-context.js'
+import { registerIpcHandlers } from './ipc-handlers.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+
+let ctx: AppContext
 
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -42,7 +47,13 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
-  createMainWindow()
+  ctx = createAppContext()
+  const win = createMainWindow()
+  ctx.mainWindow = win
+
+  registerIpcHandlers({
+    getState: () => ctx.stateMachine.getState(),
+  })
 })
 
 app.on('window-all-closed', () => {

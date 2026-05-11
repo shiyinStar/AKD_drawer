@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-11
+**最后更新**: 2026-05-11 (阶段 2 完成)
 
 ---
 
@@ -82,12 +82,65 @@
 
 ---
 
-## 下一步：阶段 2 — 核心基础设施
+## 阶段 2：核心基础设施 ✅ 完成
 
-- 步骤 2.1: IPC 通信层
-- 步骤 2.2: 全局状态机
-- 步骤 2.3: 配置存储
-- 步骤 2.4: 应用上下文
+### 步骤 2.1 — IPC 通信层 ✅
+- `src/main/ipc-handlers.ts`：集中注册 5 个 `ipcMain.handle` 处理器
+  - `APP_STATE` — 返回当前状态机状态
+  - `IMPORT_IMAGE` — 占位（返回 `{ success: false }`）
+  - `RETRY_FROM_ERROR` — 占位
+  - `UPDATE_SETTINGS` — 占位
+  - `export-lineart` — 占位
+- 通过 `IpcHandlerDeps` 接口接收依赖（`getState`）
+
+### 步骤 2.2 — 全局状态机 ✅
+- `src/main/state-machine.ts`：五状态流转引擎
+  - `InvalidTransitionError` 自定义异常类
+  - `StateMachine` 类：`getState()`、`transition()`、`onStateChange()`、`removeStateChangeListener()`
+  - 合法转移白名单（`VALID_TRANSITIONS`）
+  - 非法转移抛出 `InvalidTransitionError`，状态不被修改
+  - 基于 `EventEmitter`（`node:events`）发布 `state-change` 事件
+  - 导出单例 `stateMachine`
+- `tests/unit/state-machine.test.ts`：**15 个测试全部通过**
+  - 覆盖：合法转移 ×5、非法转移 ×2、ERROR 多路径转入 ×4、事件验证、状态不变保护
+
+### 步骤 2.3 — 配置存储 ✅
+- `src/main/config-store.ts`：基于 `electron-store` v11 原生 ESM
+  - Schema 含全部 6 项默认值（hotkeys 3 子项、drawSpeed、mouseButton、overlayOpacity、overlayLineColor）
+  - `get()`、`set()`、`getAll()`、`reset()`、`onDidChange()` 方法
+  - 构造函数接收 `cwd` 选项（测试时传入临时目录，生产时使用 `dirname(process.execPath)`）
+- `tests/unit/config-store.test.ts`：**8 个测试全部通过**
+  - 使用 `mkdtempSync` 创建临时目录，`after` 钩子自动清理
+
+### 步骤 2.4 — 应用上下文 ✅
+- `src/main/app-context.ts`：DI 容器
+  - `AppContext` 接口：持有 `stateMachine`、`configStore`、`mainWindow`
+  - `createAppContext()` 工厂函数：创建 `ConfigStore`（传入 `process.execPath` 目录），组装上下文
+- `src/main/index.ts` 更新：
+  - `app.whenReady()` 中：`createAppContext()` → `createMainWindow()` → `ctx.mainWindow = win` → `registerIpcHandlers()`
+
+### 遇到的问题
+- `electron-store`（底层 `conf`）在 Electron 外运行时需要 `cwd` 或 `projectName`。将 `ConfigStore` 改为构造函数接收 `cwd` 参数，移除模块级单例，由 `createAppContext` 负责创建。
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| 源码 `require()` 检查 | 0 匹配 |
+| Node 内置模块 `node:` 协议 | 全部合规 |
+
+## 下一步：阶段 3 — 渲染进程 UI 骨架
+
+- 步骤 3.1: 全局 CSS 变量与主题
+- 步骤 3.2: 自定义标题栏组件
+- 步骤 3.3: 左侧导航栏组件
+- 步骤 3.4: 状态栏组件
+- 步骤 3.5: App.vue 整体布局
+- 步骤 3.6: 内容路由切换
+- 步骤 3.7: 图片面板：空状态与拖拽区
 
 ---
 

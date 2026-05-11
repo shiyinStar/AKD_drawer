@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-11
+**最后更新**: 2026-05-11 (阶段 2 完成)
 
 ---
 
@@ -23,7 +23,11 @@ AKD_final/
 │   └── build-workers.mjs     # esbuild: Workers → dist/workers/
 ├── src/
 │   ├── main/
-│   │   └── index.ts          # Electron 主进程入口
+│   │   ├── index.ts          # Electron 主进程入口
+│   │   ├── app-context.ts    # 依赖注入容器
+│   │   ├── ipc-handlers.ts   # IPC 通信层
+│   │   ├── state-machine.ts  # 全局状态机
+│   │   └── config-store.ts   # 配置存储
 │   ├── preload/
 │   │   └── index.ts          # contextBridge preload 脚本
 │   ├── shared/
@@ -45,11 +49,15 @@ AKD_final/
 │   ├── workers/              # esbuild 输出
 │   └── renderer/             # Vite 输出
 ├── node_modules/             # 依赖 (git ignored)
-└── memory-bank/              # 设计文档与进度跟踪
-    ├── akd-design.md         # 完整设计规格
-    ├── AKD-Implementation-Plan.md  # 实施计划
-    ├── architecture.md       # 本文件
-    └── progress.md           # 开发进度
+├── memory-bank/              # 设计文档与进度跟踪
+│   ├── akd-design.md         # 完整设计规格
+│   ├── AKD-Implementation-Plan.md  # 实施计划
+│   ├── architecture.md       # 本文件
+│   └── progress.md           # 开发进度
+└── tests/
+    └── unit/
+        ├── state-machine.test.ts    # 状态机 15 个单元测试
+        └── config-store.test.ts     # 配置存储 8 个单元测试
 ```
 
 ## 文件职责说明
@@ -103,11 +111,47 @@ esbuild 构建两个 Worker。除不需要 external `electron` 外，与 build-m
 - `IPC_CHANNELS` — 10 个 IPC 通道名常量（as const）
 
 ### src/main/index.ts
-Electron 主进程入口。`app.whenReady()` → `createMainWindow()` 创建 960×680 BrowserWindow：
+Electron 主进程入口。`app.whenReady()` → `createAppContext()` → `createMainWindow()` → `registerIpcHandlers()`:
+- 创建 `AppContext`（DI 容器，持有状态机 + 配置存储 + 主窗口引用）
+- `createMainWindow()` 创建 960×680 BrowserWindow
 - CSP 通过 `session.defaultSession.webRequest.onHeadersReceived` 设置
 - `show: false` + `ready-to-show` → `win.show()` 避免白屏
 - 开发模式 `loadURL(http://localhost:5173)`，生产模式 `loadFile(dist/renderer/index.html)`
 - `window-all-closed` 不执行 `app.quit()`（为系统托盘保留进程）
+- `registerIpcHandlers()` 注册所有 IPC handler，传入 `getState` 依赖
+
+### src/main/app-context.ts
+依赖注入容器 — 持有三个核心单例的引用：
+- `stateMachine: StateMachine` — 全局状态机实例
+- `configStore: ConfigStore` — 配置存储实例（由 `createAppContext` 创建，cwd 指向 `dirname(process.execPath)`）
+- `mainWindow: BrowserWindow | null` — 主窗口引用（初始 null，窗口创建后赋值）
+- `createAppContext()` 工厂函数负责组装，禁止模块间全局 import 互相引用
+
+### src/main/ipc-handlers.ts
+IPC 通信层 — 集中注册所有 `ipcMain.handle` 处理器：
+- `APP_STATE` → 返回当前状态机状态
+- `IMPORT_IMAGE(filePath)` → 占位（返回 `{ success: false }`）
+- `RETRY_FROM_ERROR()` → 占位
+- `UPDATE_SETTINGS(partialSettings)` → 占位
+- `export-lineart()` → 占位
+- 通过 `IpcHandlerDeps` 接口接收依赖，不直接 import 全局单例
+- 后续阶段将逐步替换占位实现为真实业务逻辑
+
+### src/main/state-machine.ts
+全局状态机 — AKD 的核心控制中枢：
+- `InvalidTransitionError` — 自定义异常，非法状态转移时抛出
+- `StateMachine` 类：`getState()`、`transition(newState)`、`onStateChange(listener)`、`removeStateChangeListener(listener)`
+- `transition()` 校验转移合法性（白名单 `VALID_TRANSITIONS`），非法转移抛异常且**状态不改变**
+- 基于 `EventEmitter`（`node:events`）发布 `state-change` 事件，事件参数 `{ from, to }`
+- 导出单例 `stateMachine`
+- 5 状态转移规则：NOT_READY→IDLE/ERROR, IDLE→PREVIEWING/NOT_READY/ERROR, PREVIEWING→DRAWING/IDLE/NOT_READY/ERROR, DRAWING→IDLE/NOT_READY/ERROR, ERROR→NOT_READY
+
+### src/main/config-store.ts
+配置持久化存储 — 基于 `electron-store` v11 原生 ESM：
+- Schema 含全部 6 项默认值：hotkeys（preview/startDraw/stopDraw）、drawSpeed（500）、mouseButton（'left'）、overlayOpacity（0.6）、overlayLineColor（'#000000'）
+- `get(key)` / `set(key, value)` / `getAll()` / `reset(key)` / `onDidChange(key, callback)`
+- 构造函数接收 `cwd` 选项（测试时传临时目录，生产时 `createAppContext` 传入 `dirname(process.execPath)` 便携化部署）
+- 不再导出模块级单例，由 `createAppContext` 负责初始化
 
 ### src/preload/index.ts
 contextBridge preload 脚本。通过 `exposeInMainWorld` 向渲染进程注入 `window.electronAPI`，提供 9 个方法：
