@@ -1,0 +1,30 @@
+import * as esbuild from 'esbuild'
+
+await esbuild.build({
+  entryPoints: ['src/main/index.ts', 'src/preload/index.ts'],
+  format: 'esm',
+  platform: 'node',
+  target: 'node20',
+  bundle: true,
+  sourcemap: true,
+  outdir: 'dist/main',
+  external: [
+    'electron',
+    'onnxruntime-node',
+    '@techstark/opencv-js',
+    'node:worker_threads',
+    'node:fs',
+    'node:fs/promises',
+    'node:path',
+    'node:url',
+    'node:os',
+    'node:crypto',
+    'node:events',
+    'node:util',
+    'node:child_process',
+    'node:stream',
+    'node:stream/promises',
+    'node:module',
+    'node:process',
+  ],
+})

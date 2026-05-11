@@ -1,0 +1,47 @@
+import { contextBridge, ipcRenderer } from 'electron'
+import type { StatusState, PipelineProgress, ErrorInfo } from '../shared/types.js'
+import { IPC_CHANNELS } from '../shared/types.js'
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  getAppState: (): Promise<StatusState> =>
+    ipcRenderer.invoke(IPC_CHANNELS.APP_STATE),
+
+  onAppStateChange: (callback: (state: StatusState) => void): void => {
+    ipcRenderer.on(IPC_CHANNELS.APP_STATE, (_event, state: StatusState) =>
+      callback(state),
+    )
+  },
+
+  onPipelineProgress: (callback: (progress: PipelineProgress) => void): void => {
+    ipcRenderer.on(
+      IPC_CHANNELS.PIPELINE_PROGRESS,
+      (_event, progress: PipelineProgress) => callback(progress),
+    )
+  },
+
+  onDrawStatus: (callback: (status: unknown) => void): void => {
+    ipcRenderer.on(IPC_CHANNELS.DRAW_STATUS, (_event, status: unknown) =>
+      callback(status),
+    )
+  },
+
+  onAppError: (callback: (error: ErrorInfo) => void): void => {
+    ipcRenderer.on(IPC_CHANNELS.APP_ERROR, (_event, error: ErrorInfo) =>
+      callback(error),
+    )
+  },
+
+  importImage: (filePath: string): Promise<unknown> =>
+    ipcRenderer.invoke(IPC_CHANNELS.IMPORT_IMAGE, filePath),
+
+  retryFromError: (): Promise<unknown> =>
+    ipcRenderer.invoke(IPC_CHANNELS.RETRY_FROM_ERROR),
+
+  updateSettings: (
+    partialSettings: Record<string, unknown>,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(IPC_CHANNELS.UPDATE_SETTINGS, partialSettings),
+
+  exportLineArt: (): Promise<unknown> =>
+    ipcRenderer.invoke('export-lineart'),
+})

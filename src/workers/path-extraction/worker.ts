@@ -1,0 +1,1 @@
+// Path extraction worker — placeholder
