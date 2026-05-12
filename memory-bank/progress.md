@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-12 (阶段 10 完成)
+**最后更新**: 2026-05-12 (阶段 11 完成)
 
 ---
 
@@ -778,7 +778,104 @@
 
 ---
 
-## 下一步：阶段 11 — 错误处理与边界情况
+## 阶段 11：错误处理与边界情况 ✅ 完成
+
+### 步骤 11.1 — 集中化 ERROR 状态进入逻辑 ✅
+- `src/main/error-handler.ts` 创建：
+  - `createErrorHandler(deps)` 工厂函数，接收 `stateMachine`/`getMainWindow`
+  - `enterError(errorInfo)` 方法：
+    1. 防重入检查（已在 ERROR 则跳过）
+    2. `stateMachine.transition(ERROR)` → 触发 shortcut-manager 注销全部热键、触发叠加窗口销毁（PREVIEWING→非PREVIEWING 监听器）
+    3. 推送 IPC `APP_ERROR` + `APP_STATE` + 错误 Toast
+- `src/main/pipeline-orchestrator.ts` 重构：
+  - `PipelineDeps` 新增 `enterError` 回调
+  - catch 块改为调用 `enterError()` 替代内联 `transition + 3 次 IPC 推送`
+- `src/main/drawing-engine.ts` 重构：
+  - `DrawingEngineDeps` 新增 `enterError` 回调
+  - catch 块改为调用 `deps.enterError()`（鼠标释放仍由引擎自身处理）
+- `src/main/index.ts` 集成：
+  - 创建 `errorHandler` 实例并传入 pipeline 和 drawingEngine 的 deps
+
+### 步骤 11.2 — ERROR 覆盖层 UI ✅
+- `src/renderer/components/ErrorOverlay.vue` 创建：
+  - 绝对定位覆盖图片面板内容区，`--color-surface-100` 背景
+  - `CircleX` 图标 56px（`--color-error`）+ 错误描述 14px + 建议操作 12px
+  - [重试] 主按钮（32px、主色填充、`CircleDashed` 图标）：click / Enter / Space 激活
+  - [打开日志目录] 次链接（12px、hover 变主色）
+  - 入场动画：300ms `cubic-bezier(0.16,1,0.3,1)` fade-in + scale 0.95→1
+
+### 步骤 11.3 — ERROR 恢复流程 ✅
+- `src/main/ipc-handlers.ts` `RETRY_FROM_ERROR` handler 实现：
+  1. 验证当前状态为 ERROR → 否则返回 `{ success: false }`
+  2. 清空 context 中全部缓存数据（imageBuffer/imagePath/lineArtBuffer/lineArtBase64/paths/boundingBox/width/height）
+  3. 状态机转 NOT_READY
+  4. 推送 `APP_STATE` + info Toast "已重置，请重新导入图片"
+- `src/renderer/App.vue` 更新：
+  - 新增 `errorInfo` ref + `provide('appStatus'/'errorInfo')` 供子组件注入
+  - `onAppStateChange` 中非 ERROR 状态自动清除 `errorInfo`
+  - `onMounted` 中注册 `onAppError` IPC 监听器
+- `src/renderer/components/ImagePanel.vue` 更新：
+  - 注入 `appStatus` 和 `errorInfo`
+  - ERROR 状态 + errorInfo 存在时渲染 `ErrorOverlay` 替代正常内容
+  - `onRetry` 调用 `window.electronAPI.retryFromError()`
+
+### 步骤 11.4 — 应用退出保护 ✅
+- `src/main/index.ts` 更新：
+  - **单实例锁**：`app.requestSingleInstanceLock()` → 获取失败则 `app.quit()`
+  - **`second-instance` 事件**：激活已有主窗口（restore/show/focus）
+  - **`before-quit` 事件**：DRAWING 状态下 `event.preventDefault()` → `drawingEngine.stop()` 抬笔 → 2s 后 `app.quit()`
+  - **`quit` 事件**：新增 `shortcutManager.destroy()` 清理
+
+### 新增/修改文件清单
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/main/error-handler.ts` | 新增 | 集中化 ERROR 状态进入逻辑 |
+| `src/renderer/components/ErrorOverlay.vue` | 新增 | ERROR 覆盖层 UI 组件 |
+| `src/main/pipeline-orchestrator.ts` | 修改 | catch 块委托 enterError() |
+| `src/main/drawing-engine.ts` | 修改 | DrawingEngineDeps 新增 enterError；catch 块委托 |
+| `src/main/ipc-handlers.ts` | 修改 | 实现 RETRY_FROM_ERROR handler |
+| `src/main/index.ts` | 修改 | 集成 errorHandler；单实例锁；before-quit；shortcutManager.destroy |
+| `src/renderer/App.vue` | 修改 | errorInfo 状态管理；provide/inject；onAppError 监听 |
+| `src/renderer/components/ImagePanel.vue` | 修改 | 注入状态；ERROR 时渲染 ErrorOverlay |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1544 模块 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/drawing-engine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/shortcut-manager.test.ts` | 13/13 通过 |
+| `npx tsx --test tests/unit/geometry-utils.test.ts` | 3/3 通过 |
+| **总测试数** | **69** |
+
+### 阶段 11 Bug 修复记录
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| ERROR 状态栏正确但 ErrorOverlay 不渲染 | Vue `provide`/`inject` 通过 `<KeepAlive>` 传递 Ref 时模板绑定不稳定 | 改为标准 props 传递：App → ContentRouter(新增透传props) → ImagePanel(defineProps)，移除 inject |
+| 点击重试后图片面板未重置为空拖拽区 | 主进程清空了 Buffer/paths，但 ImagePanel 前端的 hasImage/originalSrc/lineArtSrc 未同步清除 | ImagePanel 添加 `watch(props.appStatus)` 检测 ERROR→NOT_READY 时自动重置 4 个前端状态 |
+
+### 注意事项
+- ERROR 进入时，以下副作用自动由各模块的 state-change 监听器触发，`error-handler.ts` 无需重复处理：
+  - 热键注销 → `shortcut-manager.ts` 监听 `state-change → ERROR → refresh() → unregisterAll`
+  - 叠加窗口销毁 → `index.ts` 监听 `PREVIEWING→non-PREVIEWING → destroyOverlay()`
+  - 绘制停止 → `drawing-engine.ts` 在调用 `enterError` 前自行释放鼠标
+- Workers 无全局注册表，每个 `runInference`/`runPathExtraction` 在结果/错误/超时时自行 `terminate()`，无僵尸线程风险
+- `enterError()` 含防重入保护：已在 ERROR 状态时跳过，避免重复推送 IPC
+- `RETRY_FROM_ERROR` 清空所有运行时缓存后转 NOT_READY，用户需重新导入图片
+- 单实例锁在 `app.whenReady()` 之前执行，第二个实例立即退出
+- `before-quit` 中 DRAWING 状态会先抬笔延迟 2s 再退出
+- **ErrorOverlay 状态传递必须使用 props 而非 provide/inject**：KeepAlive 缓存组件中 inject 的 Ref 模板绑定存在响应性边界情况，标准 props 透传链路可靠
+
+---
+
+## 下一步：阶段 12 — 设置面板
 
 ---
 

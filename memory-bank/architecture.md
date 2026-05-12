@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-12 (阶段 10 完成)
+**最后更新**: 2026-05-12 (阶段 11 完成)
 
 ---
 
@@ -40,6 +40,7 @@ AKD_final/
 │   │   ├── drawing-engine.ts       # 绘制引擎（阶段 8 新增）
 │   │   ├── tray-manager.ts         # 系统托盘管理器（阶段 9 新增）
 │   │   ├── shortcut-manager.ts     # 快捷键管理器（阶段 10 新增）
+│   │   ├── error-handler.ts         # 集中化错误处理（阶段 11 新增）
 │   │   └── adapters/
 │   │       └── nut-js-adapter.ts   # CJS→ESM 桥接（阶段 8 新增）
 │   ├── preload/
@@ -66,6 +67,7 @@ AKD_final/
 │   │   │   ├── StatusIndicator.vue # 5 状态指示灯（颜色+图标+动画+ARIA）
 │   │   │   ├── ToastContainer.vue  # Toast 通知容器（右下角固定）
 │   │   │   ├── ToastItem.vue       # 单条 Toast（毛玻璃+类型色条）
+│   │   │   ├── ErrorOverlay.vue      # ERROR 覆盖层（阶段 11 新增）
 │   │   │   └── SettingsPanel.vue   # 设置面板（占位）
 │   │   └── overlay/
 │   │       ├── index.html       # 叠加层 HTML 入口（Canvas + 缩放标签）
@@ -452,6 +454,25 @@ ONNX Runtime 推理 Worker — 阶段 5 实现：
 - 返回 `{ refresh, destroy }` — `destroy()` 调用 `globalShortcut.unregisterAll()`
 - 5 个动作回调由 `src/main/index.ts` 提供：`previewToggle`（IDLE→enterPreview / PREVIEWING→exitPreview）、`startDraw`（从 context + overlay bounds → drawingEngine.start）、`stopDraw`（drawingEngine.stop）、`toggleOverlay`（preview-overlay.toggleOverlayInteractive）
 
+### src/main/error-handler.ts
+集中化 ERROR 状态进入逻辑 — 阶段 11 新增：
+- `createErrorHandler({ stateMachine, getMainWindow })` 工厂函数，返回 `{ enterError }`
+- **`enterError(errorInfo)`** — 统一的 ERROR 状态入口：
+  1. 防重入检查（已在 ERROR 则跳过）
+  2. `stateMachine.transition(ERROR)` — 触发所有状态变更监听器（shortcut-manager 注销热键、叠加窗口销毁）
+  3. 推送 3 条 IPC：`APP_ERROR`（错误详情）、`APP_STATE`（ERROR）、`SHOW_TOAST`（错误原因）
+- 被 `pipeline-orchestrator.ts` 和 `drawing-engine.ts` 在 catch 块中调用，替代原有的内联 `transition + IPC send` 重复代码
+- **设计原则**：仅负责状态迁移和 IPC 推送，不直接操作窗口/按键/Worker。窗口销毁由 `index.ts` 的 `state-change` 监听器处理；Worker 在各自 Promise 内自行 terminate
+
+### src/renderer/components/ErrorOverlay.vue
+ERROR 覆盖层 UI — 阶段 11 新增：
+- 绝对定位覆盖图片面板内容区，`--color-surface-100` 背景
+- **布局**：垂直居中，`CircleX` 图标 56px（`--color-error`）→ 错误描述 14px → 建议操作 12px → [重试] 主按钮 → [打开日志目录] 链接
+- **[重试] 按钮**：主按钮规格（32px、主色填充、`CircleDashed` 图标），支持 click / Enter / Space 激活
+- **[打开日志目录]**：12px 次要链接，hover 变 `--color-primary-500`
+- **入场动画**：300ms `cubic-bezier(0.16,1,0.3,1)`，覆盖层 fade-in + 内容 scale 0.95→1
+- 通过 `emit('retry')` 和 `emit('openLog', logPath)` 向父组件通知用户操作
+
 ### src/main/adapters/nut-js-adapter.ts
 CJS → ESM Adapter — 阶段 8 新增：
 - **Main Process 中唯一使用 `createRequire` 的文件**（与 Worker 中的 `createRequire` 用途不同）
@@ -779,3 +800,65 @@ app.on('quit') → trayManager.destroy()
 | prod | `process.resourcesPath/icons/tray/`（electron-builder extraResources） |
 
 `package.json` 的 `extraResources` 新增 `{ "from": "resources/icons", "to": "icons" }`，确保打包后图标文件位于 asar 外可直接路径访问。
+
+## 错误处理架构洞察（阶段 11）
+
+### 集中化 ERROR 进入 vs 分散副作用
+
+阶段 11 引入了 `error-handler.ts` 作为 ERROR 状态的统一入口，但副作用（热键注销、窗口销毁、Worker 终止）分散在各模块的 state-change 监听器中：
+
+```
+enterError(errorInfo)
+  → stateMachine.transition(ERROR)
+    → shortcut-manager: state-change 监听 → refresh() → unregisterAll()
+    → index.ts: PREVIEWING→non-PREVIEWING 监听 → destroyOverlay()
+  → IPC: APP_ERROR + APP_STATE + SHOW_TOAST
+```
+
+**为什么不由 error-handler 直接处理所有副作用？** 遵循单一职责原则。error-handler 只负责状态迁移和 IPC 推送。热键管理、窗口销毁、Worker 终止分别由各自的模块通过监听 `state-change` 事件响应，避免 error-handler 依赖过多模块（循环依赖风险）。
+
+### ERROR 恢复流程
+
+```
+用户点击 [重试]
+  → IPC RETRY_FROM_ERROR
+  → 验证当前状态为 ERROR
+  → 清空 context 全部缓存（imageBuffer/paths/boundingBox 等）
+  → transition(NOT_READY)
+  → IPC: APP_STATE(NOT_READY) + Toast "已重置"
+  → UI: ErrorOverlay 消失，恢复 ImageDropZone
+  → 用户重新导入图片 → 新管线启动
+```
+
+**注意**：当前实现不重新预加载模型（模型在推理 Worker 内部按需加载），重启应用时托盘提示"模型加载中"的逻辑暂未实现。
+
+### 单实例锁与退出保护
+
+```
+app.requestSingleInstanceLock()
+  ├── 成功 → 注册 second-instance 事件（激活已有窗口）
+  └── 失败 → app.quit()
+
+app.on('before-quit')
+  → if DRAWING: event.preventDefault()
+    → drawingEngine.stop() 抬笔
+    → setTimeout(2000) → app.quit()
+```
+
+- 单实例锁在 `app.whenReady()` **之前**执行，确保第二个实例尽早退出
+- `before-quit` 中 DRAWING 状态延迟 2s 退出，给予 `stop()` 时间在当前步进循环中检测 `stopFlag` 并抬笔
+
+### ErrorOverlay 与父组件通信（props 透传，非 provide/inject）
+
+ErrorOverlay 通过**标准 Vue props 透传**接收状态：
+
+```
+App.vue: :appStatus="appStatus" :errorInfo="errorInfo"
+  → ContentRouter.vue: defineProps + v-bind 透传给动态组件
+    → ImagePanel.vue: defineProps<{ appStatus, errorInfo }>
+      → ErrorOverlay.vue: props: { error: ErrorInfo }
+```
+
+**为什么是 props 而非 provide/inject？** 初始实现使用 provide/inject 避免 prop drilling。实测发现 `<KeepAlive>` 缓存组件中，inject 返回的 Ref 在模板绑定中存在响应性边界情况——状态变更后 `v-if` 条件不触发重新渲染。改为 props 后响应性链路完全确定。
+
+**ImagePanel 前端状态重置**：`watch(() => props.appStatus)` 检测 `ERROR → NOT_READY`（用户点击重试后），自动清除 `hasImage`/`originalSrc`/`lineArtSrc`/`isProcessing` 四个前端 ref，还原为空拖拽区。与主进程 `RETRY_FROM_ERROR` 的 Buffer 清空构成前后端双重重置。

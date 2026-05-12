@@ -3,15 +3,17 @@ import type { AppContext } from './app-context.js'
 import type { StateMachine } from './state-machine.js'
 import { StatusState } from '../shared/types.js'
 import { IPC_CHANNELS } from '../shared/types.js'
-import type { PipelineProgress, ErrorInfo } from '../shared/types.js'
+import type { PipelineProgress } from '../shared/types.js'
 import { runInference, runPathExtraction } from './worker-manager.js'
 import { computeBoundingBox } from '../shared/geometry-utils.js'
+import type { createErrorHandler } from './error-handler.js'
 
 export interface PipelineDeps {
   modelPath: string
   getContext: () => AppContext
   getMainWindow: () => BrowserWindow | null
   stateMachine: StateMachine
+  enterError: ReturnType<typeof createErrorHandler>['enterError']
 }
 
 export function createPipelineOrchestrator(deps: PipelineDeps) {
@@ -19,6 +21,7 @@ export function createPipelineOrchestrator(deps: PipelineDeps) {
 
   async function run(imageBuffer: Buffer): Promise<void> {
     const win = getMainWindow()
+    const { enterError } = deps
 
     try {
       win?.webContents.send(IPC_CHANNELS.PIPELINE_PROGRESS, {
@@ -72,21 +75,12 @@ export function createPipelineOrchestrator(deps: PipelineDeps) {
         message.includes('路径提取') ||
         message.includes('未检测到可绘制线条')
 
-      const errorInfo: ErrorInfo = {
+      enterError({
         reason: message,
         suggestion: isExtractionError
           ? '建议更换线条更清晰的图片重试'
           : '请确保模型文件完整，或重新启动应用后重试',
         logPath: '',
-      }
-
-      stateMachine.transition(StatusState.ERROR)
-
-      win?.webContents.send(IPC_CHANNELS.APP_ERROR, errorInfo)
-      win?.webContents.send(IPC_CHANNELS.APP_STATE, StatusState.ERROR)
-      win?.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
-        type: 'error',
-        message: `管线失败: ${message}`,
       })
     }
   }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import type { StatusState, ToastMessage, PipelineProgress } from '../shared/types.js'
+import type { StatusState, ToastMessage, PipelineProgress, ErrorInfo } from '../shared/types.js'
 import TitleBar from './components/TitleBar.vue'
 import SideNav from './components/SideNav.vue'
 import ContentRouter from './components/ContentRouter.vue'
@@ -12,6 +12,7 @@ const activePanel = ref<string>('image')
 const appStatus = ref<StatusState>('NOT_READY' as StatusState)
 const statusExtra = ref<string>('等待导入图片')
 const isPipelineRunning = ref(false)
+const errorInfo = ref<ErrorInfo | null>(null)
 
 function updateStatusExtra() {
   if (appStatus.value === 'NOT_READY') {
@@ -21,6 +22,9 @@ function updateStatusExtra() {
 
 function onAppStateChange(state: StatusState) {
   appStatus.value = state
+  if (state !== 'ERROR') {
+    errorInfo.value = null
+  }
   switch (state) {
     case 'NOT_READY':
       updateStatusExtra()
@@ -105,6 +109,9 @@ onMounted(async () => {
 
   window.electronAPI.onAppStateChange((state) => onAppStateChange(state))
   window.electronAPI.onPipelineProgress((progress) => onPipelineProgress(progress))
+  window.electronAPI.onAppError((err) => {
+    errorInfo.value = err
+  })
   window.electronAPI.onToast((toast) => addToast(toast))
   window.electronAPI.onOverlayScaleChanged((data) => {
     if (appStatus.value === 'PREVIEWING') {
@@ -119,7 +126,7 @@ onMounted(async () => {
     <TitleBar />
     <div class="app-layout__body">
       <SideNav v-model:activePanel="activePanel" />
-      <ContentRouter :activePanel="activePanel" />
+      <ContentRouter :activePanel="activePanel" :appStatus="appStatus" :errorInfo="errorInfo" />
     </div>
     <StatusBar>
       <template #indicator>

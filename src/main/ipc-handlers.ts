@@ -1,6 +1,6 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
-import { IPC_CHANNELS } from '../shared/types.js'
-import type { StatusState, ToastMessage, AppConfig } from '../shared/types.js'
+import { IPC_CHANNELS, StatusState } from '../shared/types.js'
+import type { ToastMessage, AppConfig } from '../shared/types.js'
 import type { AppContext } from './app-context.js'
 import { handleImportImage, handleImportImageFromBase64 } from './image-import-handler.js'
 import { getOverlayWindow } from './preview-overlay.js'
@@ -73,7 +73,29 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
   })
 
   ipcMain.handle(IPC_CHANNELS.RETRY_FROM_ERROR, async () => {
-    return { success: false, reason: 'not implemented' }
+    const ctx = deps.getContext()
+    if (deps.getState() !== StatusState.ERROR) {
+      return { success: false, reason: '当前状态不允许重试' }
+    }
+
+    ctx.imageBuffer = null
+    ctx.imagePath = null
+    ctx.lineArtBuffer = null
+    ctx.lineArtBase64 = null
+    ctx.paths = null
+    ctx.boundingBox = null
+    ctx.width = 0
+    ctx.height = 0
+
+    ctx.stateMachine.transition(StatusState.NOT_READY)
+    const win = deps.getMainWindow()
+    win?.webContents.send(IPC_CHANNELS.APP_STATE, StatusState.NOT_READY)
+    win?.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
+      type: 'info',
+      message: '已重置，请重新导入图片',
+    } satisfies ToastMessage)
+
+    return { success: true }
   })
 
   ipcMain.handle(IPC_CHANNELS.UPDATE_SETTINGS, async (_event, partialSettings: Record<string, unknown>) => {

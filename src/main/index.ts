@@ -10,11 +10,26 @@ import { createOverlay, destroyOverlay, getOverlayWindow, toggleOverlayInteracti
 import { createDrawingEngine } from './drawing-engine.js'
 import { createTrayManager } from './tray-manager.js'
 import { createShortcutManager } from './shortcut-manager.js'
+import { createErrorHandler } from './error-handler.js'
 import { StatusState, IPC_CHANNELS } from '../shared/types.js'
 import type { ToastMessage } from '../shared/types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+
+const gotInstanceLock = app.requestSingleInstanceLock()
+
+if (!gotInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (ctx?.mainWindow) {
+      if (ctx.mainWindow.isMinimized()) ctx.mainWindow.restore()
+      ctx.mainWindow.show()
+      ctx.mainWindow.focus()
+    }
+  })
+}
 
 let ctx: AppContext
 
@@ -77,11 +92,17 @@ app.whenReady().then(() => {
   const win = createMainWindow()
   ctx.mainWindow = win
 
+  const errorHandler = createErrorHandler({
+    stateMachine: ctx.stateMachine,
+    getMainWindow: () => ctx.mainWindow,
+  })
+
   const pipeline = createPipelineOrchestrator({
     modelPath: resolveModelPath(),
     getContext: () => ctx,
     getMainWindow: () => ctx.mainWindow,
     stateMachine: ctx.stateMachine,
+    enterError: errorHandler.enterError,
   })
 
   function enterPreview(): void {
@@ -125,6 +146,7 @@ app.whenReady().then(() => {
     configStore: ctx.configStore,
     getMainWindow: () => ctx.mainWindow,
     destroyOverlay,
+    enterError: errorHandler.enterError,
   })
 
   function previewToggle(): void {
@@ -234,6 +256,15 @@ app.whenReady().then(() => {
 
   app.on('quit', () => {
     trayManager.destroy()
+    shortcutManager.destroy()
+  })
+
+  app.on('before-quit', (event) => {
+    if (ctx.stateMachine.getState() === StatusState.DRAWING) {
+      event.preventDefault()
+      drawingEngine.stop()
+      setTimeout(() => app.quit(), 2000)
+    }
   })
 })
 

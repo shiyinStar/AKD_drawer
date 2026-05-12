@@ -4,6 +4,7 @@ import type { ConfigStore } from './config-store.js'
 import { StatusState, IPC_CHANNELS } from '../shared/types.js'
 import type { DrawPath, BoundingBox } from '../shared/types.js'
 import { mouse, Button } from './adapters/nut-js-adapter.js'
+import type { createErrorHandler } from './error-handler.js'
 
 export interface OverlayRect {
   x: number
@@ -17,6 +18,7 @@ export interface DrawingEngineDeps {
   configStore: ConfigStore
   getMainWindow: () => BrowserWindow | null
   destroyOverlay: () => void
+  enterError: ReturnType<typeof createErrorHandler>['enterError']
 }
 
 function delay(ms: number): Promise<void> {
@@ -124,13 +126,11 @@ export function createDrawingEngine(deps: DrawingEngineDeps) {
       active = false
 
       const message = err instanceof Error ? err.message : '绘制异常'
-      stateMachine.transition(StatusState.ERROR)
-      win?.webContents.send(IPC_CHANNELS.APP_ERROR, {
+      deps.enterError({
         reason: message,
         suggestion: '请重试',
         logPath: '',
       })
-      win?.webContents.send(IPC_CHANNELS.APP_STATE, StatusState.ERROR)
       return
     }
 
