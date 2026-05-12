@@ -8,11 +8,13 @@ const schema = {
       preview: { type: 'string', default: 'F5' },
       startDraw: { type: 'string', default: 'F6' },
       stopDraw: { type: 'string', default: 'F7' },
+      toggleOverlay: { type: 'string', default: 'CommandOrControl+Shift+F9' },
     },
     default: {
       preview: 'F5',
       startDraw: 'F6',
       stopDraw: 'F7',
+      toggleOverlay: 'CommandOrControl+Shift+F9',
     },
   },
   drawSpeed: {

@@ -25,6 +25,7 @@ export interface AppConfig {
     preview: string
     startDraw: string
     stopDraw: string
+    toggleOverlay: string
   }
   drawSpeed: number
   mouseButton: 'left' | 'right'

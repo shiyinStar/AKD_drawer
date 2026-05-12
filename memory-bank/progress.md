@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-12 (阶段 9 完成)
+**最后更新**: 2026-05-12 (阶段 10 完成)
 
 ---
 
@@ -704,7 +704,81 @@
 
 ---
 
-## 下一步：阶段 10 — 快捷键管理器
+## 阶段 10：快捷键管理器 ✅ 完成
+
+### 步骤 10.1 — 快捷键管理器实现 ✅
+- `src/main/shortcut-manager.ts` 创建：
+  - `createShortcutManager(deps)` 工厂函数，接收 `stateMachine`/`configStore`/`getMainWindow`/`globalShortcut` + 5 个动作回调
+  - 监听 `stateMachine.onStateChange` → `setImmediate(() => refresh())` 延迟重新注册
+  - 各状态热键映射：
+    - NOT_READY / ERROR：无热键
+    - IDLE：`preview`（默认 F5）→ 进入预览
+    - PREVIEWING：`preview`（退出预览）+ `startDraw`（F6）+ `toggleOverlay`（Ctrl+Shift+F9）
+    - DRAWING：`stopDraw`（F7）
+  - 监听 `configStore.onDidChange('hotkeys')` → 自动重新注册
+  - 全回调含 `safeCallback` 状态双重校验（防竞态）
+  - 注册失败 → Toast 通知"热键 [键名] 已被占用"，不抛异常、不阻塞状态流转
+  - `globalShortcut` 通过 DI 注入（便于测试 mock）
+  - 导出纯函数 `getHotkeysForState(state, config)` 供测试
+- `src/shared/types.ts`：`AppConfig.hotkeys` 新增 `toggleOverlay: string`
+- `src/main/config-store.ts`：schema 新增 `hotkeys.toggleOverlay`（默认 `'CommandOrControl+Shift+F9'`）
+
+### 步骤 10.2 — preview-overlay.ts 重构 ✅
+- 移除硬编码 `TOGGLE_SHORTCUT` 常量及 `registerOverlayShortcut`/`unregisterOverlayShortcut`
+- 移除 `globalShortcut` 导入
+- 新增导出 `toggleOverlayInteractive()` — 由快捷键管理器调用
+- `Ctrl+Shift+F9` 改为可配置项，纳入快捷键管理器统一管理
+
+### 步骤 10.3 — 主进程集成 ✅
+- `src/main/index.ts`：
+  - 导入 `createShortcutManager`、`toggleOverlayInteractive`
+  - 新增 3 个函数：`previewToggle()`（IDLE→进入预览 / PREVIEWING→退出）、`startDraw()`（从 context 取 paths/boundingBox + overlay bounds → drawingEngine.start）、`stopDraw()`（drawingEngine.stop）
+  - 创建 `shortcutManager` 实例，传入 `globalShortcut` 依赖
+- `src/main/ipc-handlers.ts`：
+  - `IpcHandlerDeps` 新增 `configStore: ConfigStore`
+  - `UPDATE_SETTINGS` handler 从占位改为功能实现（写入 configStore → 快捷键管理器通过 `onDidChange` 自动响应重新注册）
+
+### Bug 修复：预览状态下按预览键再次呼出叠加窗口
+- **原因**：`exitPreview` → `transition(IDLE)` → 快捷键管理器 `state-change` 监听器同步调用 `refresh()` → `unregisterAll` + `register(F5, IDLE 回调)`。此时 F5 键仍物理按下，Electron `globalShortcut.register` 立即触发了新注册的 IDLE 回调 → `enterPreview` 再次打开叠加窗口
+- **修复**：`state-change` 回调中 `refresh()` 用 `setImmediate()` 包裹，延迟到下一个事件循环 tick 执行，使当前按键事件完全处理完毕后再重新注册热键
+
+### 新增/修改文件清单
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/main/shortcut-manager.ts` | 新增 | 快捷键管理器核心 |
+| `tests/unit/shortcut-manager.test.ts` | 新增 | 13 个单元测试 |
+| `src/shared/types.ts` | 修改 | AppConfig.hotkeys 新增 toggleOverlay |
+| `src/main/config-store.ts` | 修改 | schema 新增 hotkeys.toggleOverlay |
+| `src/main/preview-overlay.ts` | 修改 | 移除硬编码快捷键；导出 toggleOverlayInteractive |
+| `src/main/index.ts` | 修改 | 集成 shortcutManager、previewToggle/startDraw/stopDraw |
+| `src/main/ipc-handlers.ts` | 修改 | IpcHandlerDeps 新增 configStore；实现 UPDATE_SETTINGS |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1541 模块 |
+| `npx tsx --test tests/unit/shortcut-manager.test.ts` | 13/13 通过 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/drawing-engine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/geometry-utils.test.ts` | 3/3 通过 |
+| **总测试数** | **69** |
+
+### 注意事项
+- `Ctrl+Shift+F9`（切换叠加层穿透模式）已从硬编码改为配置项，默认值 `CommandOrControl+Shift+F9`，与其他热键同等对待
+- 快捷键管理器通过 `globalShortcut` DI 注入，测试时传入 mock 即可覆盖全部场景
+- 状态变更触发的 `refresh()` 使用 `setImmediate` 延迟，防止在同一物理按键事件中重复触发（见 Bug 修复记录）
+- `previewToggle` 同时处理"进入预览"和"退出预览"两种方向，根据当前状态自动判断
+
+---
+
+## 下一步：阶段 11 — 错误处理与边界情况
 
 ---
 
@@ -722,8 +796,10 @@
 10. **叠加层有独立 preload**：`src/preload/overlay.ts` → `dist/main/preload/overlay.cjs`
 11. **叠加层交互**：默认进入即交互模式（可拖拽/缩放），`Ctrl+Shift+F9` 切换穿透模式
 12. **叠加层置顶**：500ms 定时器强制 `setAlwaysOnTop(true, 'screen-saver')`，防止被其他软件覆盖
-13. **⚠ 阶段 10 提醒**：`Ctrl+Shift+F9`（切换穿透）需要在阶段 10 快捷键管理器中实现为可配置项，与其他快捷键（F5/F6/F7）同等对待
-14. **路径提取分辨率**：在原始图片尺寸下进行，大图需注意性能；叠加层 Canvas 坐标映射会缩放，不依赖原始分辨率
+13. **快捷键管理器 `setImmediate` 延迟**：状态变更触发的热键重注册使用 `setImmediate` 延迟，避免在同一物理按键事件中同步重注册导致重复触发（典型案例：PREVIEWING 下按 F5 → exitPreview → IDLE → 立即 register F5 被按键再次触发 → enterPreview）
+14. **`globalShortcut` DI 注入**：`shortcut-manager.ts` 通过 `ShortcutManagerDeps.globalShortcut` 接收 Electron 全局快捷键 API，测试时传入 mock 即可覆盖全部场景
+15. **快捷键回调双重校验**：所有热键回调通过 `safeCallback(expectedState, cb)` 包装，执行前二次验证 `stateMachine.getState() === expectedState`，防止竞态
+16. **路径提取分辨率**：在原始图片尺寸下进行，大图需注意性能；叠加层 Canvas 坐标映射会缩放，不依赖原始分辨率
 15. **nut.js Adapter**：`src/main/adapters/nut-js-adapter.ts` 是 Main Process 中唯一使用 `createRequire` 的位置，其他文件通过 ESM import 从此 adapter 导入
 16. **绘制引擎不直接操作窗口**：`start()` 接收 `overlayRect`（由调用方在调用前通过 `getOverlayWindow()?.getBounds()` 捕获），引擎本身不依赖叠加窗口引用
 17. **绘制参数校验内置于引擎**：`drawSpeed` 钳制 100~2000、`mouseButton` 回退 left、`overlayRect` 尺寸校验，调用方无需预处理

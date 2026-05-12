@@ -1,4 +1,4 @@
-import { BrowserWindow, screen, app, globalShortcut } from 'electron'
+import { BrowserWindow, screen, app } from 'electron'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { DrawPath, BoundingBox } from '../shared/types.js'
@@ -9,8 +9,6 @@ const __dirname = dirname(__filename)
 let overlayWindow: BrowserWindow | null = null
 let overlayInteractive = false
 let topTimer: ReturnType<typeof setInterval> | null = null
-
-const TOGGLE_SHORTCUT = 'CommandOrControl+Shift+F9'
 
 interface OverlayOptions {
   paths: DrawPath[]
@@ -81,7 +79,6 @@ export function createOverlay(opts: OverlayOptions): BrowserWindow {
   }, 500)
 
   overlayWindow.on('closed', () => {
-    unregisterOverlayShortcut()
     if (topTimer) {
       clearInterval(topTimer)
       topTimer = null
@@ -89,13 +86,10 @@ export function createOverlay(opts: OverlayOptions): BrowserWindow {
     overlayWindow = null
   })
 
-  registerOverlayShortcut()
-
   return overlayWindow
 }
 
 export function destroyOverlay(): void {
-  unregisterOverlayShortcut()
   if (topTimer) {
     clearInterval(topTimer)
     topTimer = null
@@ -121,19 +115,8 @@ function setOverlayInteractive(active: boolean): void {
   }
 }
 
-function registerOverlayShortcut(): void {
-  try {
-    const registered = globalShortcut.register(TOGGLE_SHORTCUT, () => {
-      setOverlayInteractive(!overlayInteractive)
-    })
-    if (!registered) {
-      console.warn(`[AKD] 全局快捷键 ${TOGGLE_SHORTCUT} 注册失败（可能被占用）`)
-    }
-  } catch (err) {
-    console.warn(`[AKD] 全局快捷键 ${TOGGLE_SHORTCUT} 注册异常:`, err)
+export function toggleOverlayInteractive(): void {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    setOverlayInteractive(!overlayInteractive)
   }
-}
-
-function unregisterOverlayShortcut(): void {
-  globalShortcut.unregister(TOGGLE_SHORTCUT)
 }

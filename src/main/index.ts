@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, dialog } from 'electron'
+import { app, BrowserWindow, session, dialog, globalShortcut } from 'electron'
 import { join, dirname } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -6,9 +6,10 @@ import { createAppContext } from './app-context.js'
 import type { AppContext } from './app-context.js'
 import { registerIpcHandlers } from './ipc-handlers.js'
 import { createPipelineOrchestrator } from './pipeline-orchestrator.js'
-import { createOverlay, destroyOverlay, getOverlayWindow } from './preview-overlay.js'
+import { createOverlay, destroyOverlay, getOverlayWindow, toggleOverlayInteractive } from './preview-overlay.js'
 import { createDrawingEngine } from './drawing-engine.js'
 import { createTrayManager } from './tray-manager.js'
+import { createShortcutManager } from './shortcut-manager.js'
 import { StatusState, IPC_CHANNELS } from '../shared/types.js'
 import type { ToastMessage } from '../shared/types.js'
 
@@ -126,6 +127,51 @@ app.whenReady().then(() => {
     destroyOverlay,
   })
 
+  function previewToggle(): void {
+    const state = ctx.stateMachine.getState()
+    if (state === StatusState.IDLE) {
+      enterPreview()
+    } else if (state === StatusState.PREVIEWING) {
+      exitPreview()
+    }
+  }
+
+  function startDraw(): void {
+    const state = ctx.stateMachine.getState()
+    if (state !== StatusState.PREVIEWING) return
+
+    const paths = ctx.paths
+    const boundingBox = ctx.boundingBox
+    if (!paths || !boundingBox) return
+
+    const overlay = getOverlayWindow()
+    if (!overlay || overlay.isDestroyed()) return
+
+    const bounds = overlay.getBounds()
+    drawingEngine.start(paths, boundingBox, {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    })
+  }
+
+  function stopDraw(): void {
+    if (ctx.stateMachine.getState() !== StatusState.DRAWING) return
+    drawingEngine.stop()
+  }
+
+  const shortcutManager = createShortcutManager({
+    stateMachine: ctx.stateMachine,
+    configStore: ctx.configStore,
+    getMainWindow: () => ctx.mainWindow,
+    onPreviewToggle: previewToggle,
+    onStartDraw: startDraw,
+    onStopDraw: stopDraw,
+    onToggleOverlay: toggleOverlayInteractive,
+    globalShortcut,
+  })
+
   async function exportLineArt(): Promise<void> {
     const lineArtBuffer = ctx.lineArtBuffer
     if (!lineArtBuffer) {
@@ -174,6 +220,7 @@ app.whenReady().then(() => {
     exitPreview,
     drawingEngine,
     exportLineArt,
+    configStore: ctx.configStore,
   })
 
   const trayManager = createTrayManager({

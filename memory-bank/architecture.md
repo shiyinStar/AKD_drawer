@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-12 (阶段 9 完成)
+**最后更新**: 2026-05-12 (阶段 10 完成)
 
 ---
 
@@ -38,7 +38,8 @@ AKD_final/
 │   │   ├── pipeline-orchestrator.ts # 管线编排器
 │   │   ├── preview-overlay.ts       # 叠加窗口管理 + 全局快捷键
 │   │   ├── drawing-engine.ts       # 绘制引擎（阶段 8 新增）
-│   ├── tray-manager.ts         # 系统托盘管理器（阶段 9 新增）
+│   │   ├── tray-manager.ts         # 系统托盘管理器（阶段 9 新增）
+│   │   ├── shortcut-manager.ts     # 快捷键管理器（阶段 10 新增）
 │   │   └── adapters/
 │   │       └── nut-js-adapter.ts   # CJS→ESM 桥接（阶段 8 新增）
 │   ├── preload/
@@ -97,6 +98,7 @@ AKD_final/
     │   ├── geometry-utils.test.ts       # 几何工具 3 个单元测试
     │   ├── path-extraction-worker.test.ts # 路径提取 Worker 7 个单元测试
     │   └── drawing-engine.test.ts       # 绘制引擎 13 个单元测试（阶段 8 新增）
+    │       └── shortcut-manager.test.ts   # 快捷键管理器 13 个单元测试（阶段 10 新增）
     └── integration/
         └── pipeline-e2e.test.ts         # 管线端到端 5 个集成测试
 ```
@@ -384,18 +386,16 @@ ONNX Runtime 推理 Worker — 阶段 5 实现：
 - **⚠ 算法演进**：阶段 6 使用 `findContours`（轮廓描边）→ 阶段 7 替换为骨架化 + 追踪（单线中心线），解决了粗线变双线的问题
 
 ### src/main/preview-overlay.ts
-叠加窗口管理 + 全局快捷键 — 阶段 7 新增：
+叠加窗口管理 — 阶段 7 新增 / 阶段 10 重构：
 - `createOverlay({ paths, boundingBox, lineColor, opacity })` — 创建透明置顶无框叠加窗口
   - 初始尺寸 = boundingBox.size，主屏幕居中
   - 加载 `dist/renderer/overlay/index.html`（dev 模式走 Vite dev server）
   - 500ms 定时器强制 `setAlwaysOnTop(true, 'screen-saver')`
   - 默认进入交互模式（可直接拖拽/缩放）
-- `destroyOverlay()` — 销毁窗口 + 清理定时器 + 注销全局快捷键
+- `destroyOverlay()` — 销毁窗口 + 清理定时器
 - `getOverlayWindow()` — 获取叠加窗口引用
-- 全局快捷键：`Ctrl+Shift+F9` 切换交互/穿透模式（`registerOverlayShortcut`/`unregisterOverlayShortcut`）
-- 交互模式：`setIgnoreMouseEvents(false)` + 发送 `overlay-set-interactive: true` → 渲染侧显示手柄
-- 穿透模式：`setIgnoreMouseEvents(true)` + 发送 `overlay-set-interactive: false` → 隐藏手柄
-- **⚠ 阶段 10 提醒**：`Ctrl+Shift+F9` 需在快捷键管理器中实现为可配置项
+- `toggleOverlayInteractive()` — 切换交互/穿透模式（阶段 10 新增，由快捷键管理器调用；原 `registerOverlayShortcut`/`unregisterOverlayShortcut` 已移除）
+- 全局快捷键 `Ctrl+Shift+F9` 已从本文件移除，统一由 `shortcut-manager.ts` 管理
 
 ### src/main/drawing-engine.ts
 绘制引擎核心 — 阶段 8 新增：
@@ -434,6 +434,23 @@ ONNX Runtime 推理 Worker — 阶段 5 实现：
 - 图标通过 `nativeImage.createFromPath()` 加载，resize 至 16×16
 - 5 状态图标映射：`ICON_MAP` + `STATE_LABELS` 两个 Record
 - 菜单随状态动态重建（`buildMenu()`），`hasLineArt = state === IDLE && ctx.lineArtBuffer !== null`
+
+### src/main/shortcut-manager.ts
+快捷键管理器 — 阶段 10 新增：
+- `createShortcutManager(deps)` 工厂函数，接收 `stateMachine`/`configStore`/`getMainWindow`/`globalShortcut` + 5 个动作回调（`onPreviewToggle`/`onStartDraw`/`onStopDraw`/`onToggleOverlay`）
+- **状态-热键映射**：
+  - NOT_READY / ERROR：无热键
+  - IDLE：`preview`（进入预览）
+  - PREVIEWING：`preview`（退出预览）+ `startDraw` + `toggleOverlay`
+  - DRAWING：`stopDraw`
+- **状态变更监听**：`stateMachine.onStateChange` → `setImmediate(() => refresh())` 延迟重新注册（防止同一物理按键事件中同步重注册导致重复触发）
+- **配置变更监听**：`configStore.onDidChange('hotkeys')` → 自动 `refresh()`
+- **回调安全包装**：`safeCallback(expectedState, cb)` → 执行前二次验证 `stateMachine.getState() === expectedState`（防竞态）
+- **注册失败处理**：捕获异常 → Toast 通知"热键 [键名] 已被占用"，不阻塞状态流转
+- **DI 设计**：`globalShortcut` 通过 `ShortcutManagerDeps.globalShortcut` 注入（`Pick<Electron.GlobalShortcut, 'register' | 'unregisterAll'>`），测试时传入 mock
+- 导出纯函数 `getHotkeysForState(state, config)` 供测试：返回指定状态下应注册的热键列表
+- 返回 `{ refresh, destroy }` — `destroy()` 调用 `globalShortcut.unregisterAll()`
+- 5 个动作回调由 `src/main/index.ts` 提供：`previewToggle`（IDLE→enterPreview / PREVIEWING→exitPreview）、`startDraw`（从 context + overlay bounds → drawingEngine.start）、`stopDraw`（drawingEngine.stop）、`toggleOverlay`（preview-overlay.toggleOverlayInteractive）
 
 ### src/main/adapters/nut-js-adapter.ts
 CJS → ESM Adapter — 阶段 8 新增：
@@ -518,7 +535,7 @@ Worker 生命周期管理器 — 阶段 5~6：
 ## 已知问题
 
 - **Node.js v24 + `.mjs` 类型注解**：Node.js v24 对 `.mjs` 文件不做 TypeScript 类型剥离。解决：使用 `.ts` + `tsx` 运行，纯 JS 的 `.mjs` 用 `node` 运行。
-- **`Ctrl+Shift+F9` 当前硬编码**：切换叠加层穿透模式的快捷键在 `preview-overlay.ts` 中写死。阶段 10 需改为从 configStore 读取，并纳入快捷键管理器统一管理。仅在预览状态注册。
+- **快捷键 `setImmediate` 延迟**：状态变更触发的热键重注册使用 `setImmediate` 延迟。直接同步重注册会导致同一物理按键事件触发新旧两个回调（例：PREVIEWING 下按 F5 → exitPreview → 同步 register(F5, IDLE 回调) → 立即触发 enterPreview）。`setImmediate` 确保当前事件完全结束再重注册。
 - **路径提取在大图上性能**：Zhang-Suen 骨架化在原始图片分辨率下运行。未来可考虑在路径提取前加入缩放（如 max 1024px）。
 - **`session.defaultSession` 是静态成员**：不能通过 `win.webContents.session.defaultSession` 访问，必须 `import { session } from 'electron'; session.defaultSession`。
 - **Preload 必须 `.cjs` 扩展名**：`"type": "module"` 导致 Electron 将 `.js` 以 ESM 解析，preload 中 `require('electron')` 失败。解决：`build-main.mjs` 将 preload 单独构建为 CJS + `.cjs`。
@@ -621,13 +638,46 @@ const { cv } = require('@dalongrong/opencv-wasm')
 
 **教训**：Emscripten 编译的 WASM 包在 `worker_threads` 环境下的兼容性与构建配置强相关。优先选择明确标注支持 Node.js 且附带本地 WASM 文件的包。
 
-## ⚠ 阶段 10 待办：`Ctrl+Shift+F9` 可配置化
+## 快捷键管理器架构洞察（阶段 10）
 
-当前 `Ctrl+Shift+F9` 在 `preview-overlay.ts` 中硬编码为 `TOGGLE_SHORTCUT` 常量。阶段 10（快捷键管理器）需要：
-- 在 `config-store.ts` 的 schema 中新增 `hotkeys.toggleOverlay` 配置项（默认 `'Ctrl+Shift+F9'`）
-- 快捷键管理器监听 `state-change` → PREVIEWING 状态注册该键 → 退出 PREVIEWING 注销
-- `createOverlay` 改为接收快捷键参数（或从 configStore 读取）而非硬编码常量
-- `globalShortcut.register` 改为通过快捷键管理器统一管理
+### 状态-热键映射与生命周期
+
+快捷键管理器的核心设计原则：**监听状态机变更 → 全量注销 → 按当前状态重新注册**。
+
+| 状态 | 注册热键 | 动作 |
+|------|---------|------|
+| NOT_READY | 无 | — |
+| IDLE | preview（默认 F5） | 进入预览 |
+| PREVIEWING | preview + startDraw（F6）+ toggleOverlay（Ctrl+Shift+F9） | 退出预览 / 开始绘制 / 切换穿透 |
+| DRAWING | stopDraw（F7） | 停止绘制并抬笔 |
+| ERROR | 无 | — |
+
+`configStore.onDidChange('hotkeys')` 触发时同样全量重注册。用户修改快捷键设置（阶段 12）后即时生效。
+
+### `setImmediate` 延迟重注册
+
+状态变更回调中 `refresh()` 通过 `setImmediate` 延迟执行。原因：预览切换（F5）在 `previewToggle` 中同步触发 `exitPreview` → `transition(IDLE)` → 快捷键管理器 `state-change` 监听器同步调用 `refresh()` → `unregisterAll` + `register(F5, IDLE 回调)`。若 F5 键仍物理按下，Electron `globalShortcut.register` 会立即触发新注册的 IDLE 回调 → `enterPreview` 再次打开叠加窗口，形成"关不掉预览"的 bug。
+
+`setImmediate` 确保当前按键事件完全处理完毕后（回调返回、事件循环进入下一 tick）才执行重注册。
+
+### `safeCallback` 双重状态校验
+
+所有动作回调通过 `safeCallback(expectedState, cb)` 包装。执行前调用 `stateMachine.getState() === expectedState` 二次验证。即使重注册瞬间状态已变更，旧回调也不会误触发。
+
+### `globalShortcut` DI 注入
+
+`globalShortcut` 通过 `ShortcutManagerDeps` 注入（类型 `Pick<Electron.GlobalShortcut, 'register' | 'unregisterAll'>`），而非模块顶层 import。测试时传入 mock 对象即可覆盖全部场景（注册成功/失败/异常），无需 Electron 运行环境。
+
+### configStore.hotkeys 新增字段
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `hotkeys.preview` | `'F5'` | 进入/退出预览 |
+| `hotkeys.startDraw` | `'F6'` | 开始绘制 |
+| `hotkeys.stopDraw` | `'F7'` | 停止绘制 |
+| `hotkeys.toggleOverlay` | `'CommandOrControl+Shift+F9'` | 切换叠加层穿透模式 |
+
+`toggleOverlay` 从 `preview-overlay.ts` 硬编码常量改为可配置项，与其他热键同等对待。
 
 ## 依赖注入架构
 

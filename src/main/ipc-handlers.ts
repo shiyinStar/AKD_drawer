@@ -1,10 +1,11 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { IPC_CHANNELS } from '../shared/types.js'
-import type { StatusState, ToastMessage } from '../shared/types.js'
+import type { StatusState, ToastMessage, AppConfig } from '../shared/types.js'
 import type { AppContext } from './app-context.js'
 import { handleImportImage, handleImportImageFromBase64 } from './image-import-handler.js'
 import { getOverlayWindow } from './preview-overlay.js'
 import type { createDrawingEngine } from './drawing-engine.js'
+import type { ConfigStore } from './config-store.js'
 
 export interface IpcHandlerDeps {
   getState: () => StatusState
@@ -15,6 +16,7 @@ export interface IpcHandlerDeps {
   exitPreview: () => void
   drawingEngine: ReturnType<typeof createDrawingEngine>
   exportLineArt: () => Promise<void>
+  configStore: ConfigStore
 }
 
 export function registerIpcHandlers(deps: IpcHandlerDeps): void {
@@ -75,7 +77,16 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
   })
 
   ipcMain.handle(IPC_CHANNELS.UPDATE_SETTINGS, async (_event, partialSettings: Record<string, unknown>) => {
-    return { success: false, reason: 'not implemented' }
+    try {
+      const store = deps.configStore as { set: (k: string, v: unknown) => void }
+      for (const [key, value] of Object.entries(partialSettings)) {
+        store.set(key, value)
+      }
+      return { success: true }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '保存设置失败'
+      return { success: false, reason: message }
+    }
   })
 
   ipcMain.handle('export-lineart', async () => {
