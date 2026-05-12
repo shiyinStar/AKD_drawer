@@ -35,6 +35,10 @@
       {
         "from": "resources/models",
         "to": "models"
+      },
+      {
+        "from": "resources/icons",
+        "to": "icons"
       }
     ],
     "asar": true,

@@ -1,5 +1,6 @@
-import { app, BrowserWindow, session } from 'electron'
+import { app, BrowserWindow, session, dialog } from 'electron'
 import { join, dirname } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { createAppContext } from './app-context.js'
 import type { AppContext } from './app-context.js'
@@ -7,7 +8,9 @@ import { registerIpcHandlers } from './ipc-handlers.js'
 import { createPipelineOrchestrator } from './pipeline-orchestrator.js'
 import { createOverlay, destroyOverlay, getOverlayWindow } from './preview-overlay.js'
 import { createDrawingEngine } from './drawing-engine.js'
-import { StatusState } from '../shared/types.js'
+import { createTrayManager } from './tray-manager.js'
+import { StatusState, IPC_CHANNELS } from '../shared/types.js'
+import type { ToastMessage } from '../shared/types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -19,6 +22,13 @@ function resolveModelPath(): string {
     return join(process.resourcesPath, 'models', 'anime2sketch.onnx')
   }
   return join(__dirname, '..', '..', 'resources', 'models', 'anime2sketch.onnx')
+}
+
+function resolveIconDir(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'icons', 'tray')
+  }
+  return join(__dirname, '..', '..', '..', 'resources', 'icons', 'tray')
 }
 
 function createMainWindow(): BrowserWindow {
@@ -116,6 +126,45 @@ app.whenReady().then(() => {
     destroyOverlay,
   })
 
+  async function exportLineArt(): Promise<void> {
+    const lineArtBuffer = ctx.lineArtBuffer
+    if (!lineArtBuffer) {
+      win.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
+        type: 'warning',
+        message: '无线稿可导出',
+      } satisfies ToastMessage)
+      return
+    }
+
+    const result = await dialog.showSaveDialog(win, {
+      defaultPath: 'lineart.png',
+      filters: [{ name: 'PNG Image', extensions: ['png'] }],
+    })
+
+    if (result.canceled || !result.filePath) return
+
+    try {
+      await writeFile(result.filePath, lineArtBuffer)
+      win.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
+        type: 'success',
+        message: '线稿已导出',
+      } satisfies ToastMessage)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '保存失败'
+      win.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
+        type: 'error',
+        message: `导出失败: ${message}`,
+      } satisfies ToastMessage)
+    }
+  }
+
+  function requestQuit(): void {
+    if (ctx.stateMachine.getState() === StatusState.DRAWING) {
+      drawingEngine.stop()
+    }
+    app.quit()
+  }
+
   registerIpcHandlers({
     getState: () => ctx.stateMachine.getState(),
     getMainWindow: () => ctx.mainWindow,
@@ -124,6 +173,20 @@ app.whenReady().then(() => {
     enterPreview,
     exitPreview,
     drawingEngine,
+    exportLineArt,
+  })
+
+  const trayManager = createTrayManager({
+    getMainWindow: () => ctx.mainWindow,
+    getContext: () => ctx,
+    stateMachine: ctx.stateMachine,
+    iconDir: resolveIconDir(),
+    exportLineArt,
+    requestQuit,
+  })
+
+  app.on('quit', () => {
+    trayManager.destroy()
   })
 })
 

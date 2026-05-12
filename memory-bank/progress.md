@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-12 (阶段 8 完成)
+**最后更新**: 2026-05-12 (阶段 9 完成)
 
 ---
 
@@ -632,7 +632,79 @@
 
 ---
 
-## 下一步：阶段 9 — 系统托盘
+## 阶段 9：系统托盘 ✅ 完成
+
+### 步骤 9.1 — 系统托盘创建与管理 ✅
+- `src/main/tray-manager.ts` 创建：
+  - `createTrayManager(deps)` 工厂函数，接收 `getMainWindow`/`getContext`/`stateMachine`/`iconDir`/`exportLineArt`/`requestQuit`
+  - 应用启动时创建 `Tray`，默认 NOT_READY 图标
+  - **右键菜单**（`Menu.buildFromTemplate`）：
+    - "打开主窗口" → `mainWindow.show()` + `mainWindow.focus()`
+    - 分隔线
+    - 状态指示项（`状态: 未就绪`/`空闲`/`预览中`/`绘制中`/`错误`，disabled 只读）
+    - 分隔线
+    - "导出线稿 PNG"（仅 IDLE 状态 + `lineArtBuffer` 存在时 enabled）
+    - 分隔线
+    - "退出" → `requestQuit()` 安全退出流程
+  - **左键单击**：同"打开主窗口"
+  - 监听 `stateMachine.onStateChange` → `updateTray()`：更新图标 + tooltip + 重建菜单（状态文字和导出 enabled 态联动）
+  - `destroy()` 方法解除托盘
+- `src/main/index.ts` 集成：
+  - 新增 `resolveIconDir()`（dev: `resources/icons/tray/`，prod: `process.resourcesPath/icons/tray/`）
+  - 新增 `exportLineArt()` 函数（检查 buffer → 保存对话框 → `writeFile` → Toast 通知），抽取自原 IPC handler
+  - 新增 `requestQuit()` 函数：DRAWING 状态下先 `drawingEngine.stop()` 抬笔 → `app.quit()`
+  - `app.whenReady()` 中创建 `trayManager` 实例
+  - `app.on('quit')` 中 `trayManager.destroy()`
+- `src/main/ipc-handlers.ts` 重构：
+  - `IpcHandlerDeps` 新增 `exportLineArt` 回调
+  - `export-lineart` handler 简化为 `await deps.exportLineArt()`，消除导出逻辑重复
+- `package.json` 更新：`extraResources` 新增 `resources/icons`（打包时提取到 asar 外）
+
+### 步骤 9.2 — 托盘状态图标 ✅
+- `scripts/generate-tray-icons.ts`：使用 sharp 从 SVG 生成 5 个 32×32 PNG 图标
+- `resources/icons/tray/` 目录（5 个文件）：
+  - `not-ready.png` — 蓝色 `#60a5fa` 圆点 + 虚线环
+  - `idle.png` — 绿色 `#34d399` 实心圆点
+  - `previewing.png` — 靛蓝紫 `#6366f1` 圆点 + 外光晕（SVG feGaussianBlur）
+  - `drawing.png` — 琥珀色 `#fbbf24` 实心圆点
+  - `error.png` — 红色 `#f87171` 圆点 + 淡红底
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1541 模块 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/drawing-engine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/geometry-utils.test.ts` | 3/3 通过 |
+
+### 注意事项
+- 托盘图标在 dev 模式下从 `resources/icons/tray/` 加载，prod 模式下从 `process.resourcesPath/icons/tray/` 加载
+- "导出线稿 PNG" 菜单项仅在 IDLE 状态且 `lineArtBuffer` 非空时可选
+- "退出"菜单项触发 `requestQuit()`：若正在绘制（DRAWING）先停止绘制抬笔，再调用 `app.quit()`
+- 托盘 `click` 事件（左键单击）在 Windows/Linux 上直接触发；macOS 上需额外处理
+- `export-lineart` IPC handler 和托盘"导出线稿 PNG"菜单项共享同一个 `exportLineArt()` 函数，无重复代码
+- 图标生成脚本 `scripts/generate-tray-icons.ts` 为一次性脚本，勿纳入 CI/CD
+
+### 新增/修改文件清单
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/main/tray-manager.ts` | 新增 | 系统托盘：Tray 创建、右键菜单、状态联动 |
+| `scripts/generate-tray-icons.ts` | 新增 | 一次性脚本：sharp 生成 5 个托盘图标 PNG |
+| `resources/icons/tray/*.png` | 新增 | 5 个 32×32 状态图标 |
+| `src/main/index.ts` | 修改 | 新增 tray 集成、exportLineArt、requestQuit |
+| `src/main/ipc-handlers.ts` | 修改 | IpcHandlerDeps 新增 exportLineArt；export-lineart handler 委托 |
+| `package.json` | 修改 | extraResources 新增 resources/icons |
+
+---
+
+## 下一步：阶段 10 — 快捷键管理器
 
 ---
 
@@ -656,6 +728,8 @@
 16. **绘制引擎不直接操作窗口**：`start()` 接收 `overlayRect`（由调用方在调用前通过 `getOverlayWindow()?.getBounds()` 捕获），引擎本身不依赖叠加窗口引用
 17. **绘制参数校验内置于引擎**：`drawSpeed` 钳制 100~2000、`mouseButton` 回退 left、`overlayRect` 尺寸校验，调用方无需预处理
 18. **stopFlag 机制**：`stop()` 设置标志位后，引擎在当前步进循环的下一个点检测到后立即抬笔，不等待当前路径完成
+19. **托盘 `Tray`**：`src/main/tray-manager.ts` 负责托盘生命周期。左键单击打开主窗口。右键菜单根据状态机动态更新（点击"退出"前若 DRAWING 状态会先抬笔）
+20. **导出线稿统一入口**：`exportLineArt()` 在 `src/main/index.ts` 中定义，同时供 IPC handler 和托盘菜单使用，无代码重复
 
 ### 阶段 6 关键 Bug：OpenCV 包不兼容
 

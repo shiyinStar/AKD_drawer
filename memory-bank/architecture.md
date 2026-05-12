@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-12 (阶段 8 完成)
+**最后更新**: 2026-05-12 (阶段 9 完成)
 
 ---
 
@@ -20,7 +20,12 @@ AKD_final/
 ├── scripts/
 │   ├── dev.ts                # 开发编排：spawn Vite → 轮询就绪 → spawn Electron
 │   ├── build-main.mjs        # esbuild: Main Process + Preload → dist/main/
-│   └── build-workers.mjs     # esbuild: Workers → dist/workers/
+│   ├── build-workers.mjs     # esbuild: Workers → dist/workers/
+│   └── generate-tray-icons.ts # 一次性脚本：生成托盘图标 PNG（阶段 9 新增）
+├── resources/
+│   ├── models/               # ONNX 模型文件
+│   └── icons/
+│       └── tray/              # 托盘状态图标（5 个 PNG，阶段 9 新增）
 ├── src/
 │   ├── main/
 │   │   ├── index.ts          # Electron 主进程入口
@@ -33,6 +38,7 @@ AKD_final/
 │   │   ├── pipeline-orchestrator.ts # 管线编排器
 │   │   ├── preview-overlay.ts       # 叠加窗口管理 + 全局快捷键
 │   │   ├── drawing-engine.ts       # 绘制引擎（阶段 8 新增）
+│   ├── tray-manager.ts         # 系统托盘管理器（阶段 9 新增）
 │   │   └── adapters/
 │   │       └── nut-js-adapter.ts   # CJS→ESM 桥接（阶段 8 新增）
 │   ├── preload/
@@ -137,6 +143,14 @@ esbuild 构建 Main Process 和 Preload。关键配置:
 
 ### scripts/build-workers.mjs
 esbuild 构建两个 Worker。除不需要 external `electron` 外，与 build-main.mjs 配置一致。
+
+### scripts/generate-tray-icons.ts
+一次性托盘图标生成脚本 — 阶段 9 新增：
+- 使用 `sharp` 从内嵌 SVG 模板生成 5 个 32×32 PNG 文件
+- 输出到 `resources/icons/tray/`（自动创建目录）
+- 5 种图标设计：`solid`（纯色圆）、`dashed-ring`（虚线环+圆点）、`glow`（外光晕+圆点）、`cross`（淡底+圆点）
+- 手动执行：`npx tsx scripts/generate-tray-icons.ts`
+- 不纳入 CI/CD 或 pre-commit hook——仅在图标设计变更时手动运行
 
 ### src/shared/types.ts
 **所有层共享的类型定义中心**，零业务逻辑:
@@ -404,6 +418,23 @@ ONNX Runtime 推理 Worker — 阶段 5 实现：
 - `stopFlag` 机制确保 `stop()` 调用后尽速响应，不等待当前路径完成
 - **注意**：引擎不直接访问叠加窗口。`overlayRect` 由调用方在调用 `start()` 前通过 `getOverlayWindow()?.getBounds()` 捕获
 
+### src/main/tray-manager.ts
+系统托盘管理器 — 阶段 9 新增：
+- `createTrayManager(deps)` 工厂函数，返回 `{ destroy }`
+- 应用启动时创建 `Tray` 实例，初始图标为 NOT_READY 状态
+- **右键菜单**（`Menu.buildFromTemplate`）：
+  - "打开主窗口" → `mainWindow.show()` + `mainWindow.focus()`
+  - 状态指示项（`状态: 未就绪`/`空闲`/`预览中`/`绘制中`/`错误`，disabled 只读，随状态机实时更新）
+  - "导出线稿 PNG"（仅 IDLE 状态 + `lineArtBuffer` 非空时 enabled）→ 调用 `deps.exportLineArt()`
+  - "退出" → 调用 `deps.requestQuit()` 安全退出（DRAWING 状态先抬笔）
+- **左键单击**：同"打开主窗口"（Windows/Linux 直接触发）
+- 监听 `stateMachine.onStateChange` → `updateTray()`：更新托盘图标、tooltip（`AKD - 状态名`）、重建右键菜单
+- `destroy()` 方法调用 `tray.destroy()` 清理
+- 依赖通过 `TrayManagerDeps` 接口注入：`getMainWindow`/`getContext`/`stateMachine`/`iconDir`/`exportLineArt`/`requestQuit`
+- 图标通过 `nativeImage.createFromPath()` 加载，resize 至 16×16
+- 5 状态图标映射：`ICON_MAP` + `STATE_LABELS` 两个 Record
+- 菜单随状态动态重建（`buildMenu()`），`hasLineArt = state === IDLE && ctx.lineArtBuffer !== null`
+
 ### src/main/adapters/nut-js-adapter.ts
 CJS → ESM Adapter — 阶段 8 新增：
 - **Main Process 中唯一使用 `createRequire` 的文件**（与 Worker 中的 `createRequire` 用途不同）
@@ -646,3 +677,55 @@ Main Process 中 `createRequire` 仅限于 `src/main/adapters/nut-js-adapter.ts`
 | 其他 `src/main/**/*.ts` | ❌ 禁止 | 通过 ESM import 从 adapter 导入 |
 
 与 Worker 中的 OpenCV 桥接不同（Worker 在文件内直接使用 `createRequire`），Main Process 遵循更严格的隔离策略——Adapter 文件单独存在，业务代码零 CJS 互操作。
+
+## 系统托盘架构洞察（阶段 9）
+
+### 托盘生命周期
+
+```
+app.whenReady()
+  → createTrayManager(deps)    // 创建 Tray，初始 NOT_READY 图标
+  → tray.setContextMenu(...)   // 初始右键菜单
+  → stateMachine.onStateChange // 监听状态变更 → updateTray()
+  → tray.on('click')           // 左键单击 → 打开主窗口
+
+app.on('quit') → trayManager.destroy()
+```
+
+### 菜单动态更新
+
+托盘菜单不是静态的——`state-change` 事件触发时调用 `updateTray()` 重建整个菜单：
+
+- **状态文字**：`状态: ${STATE_LABELS[state]}` — 5 种中文状态名
+- **导出 enabled 态**：`state === IDLE && lineArtBuffer !== null` — 两个条件都满足才可选
+- **menu rebuild**：`Menu.buildFromTemplate()` 每次重建，不存在原地修改已有 MenuItem 的 API
+
+### 导出线稿统一入口
+
+`exportLineArt()` 函数在 `src/main/index.ts` 中定义，同时供两处使用：
+
+| 触发路径 | 调用链 |
+|---------|--------|
+| IPC handler (`export-lineart`) | `ipcMain.handle` → `deps.exportLineArt()` |
+| 托盘菜单 ("导出线稿 PNG") | `MenuItem.click` → `deps.exportLineArt()` |
+
+原 IPC handler 中的 40 行导出逻辑被替换为 1 行委托调用，消除了代码重复。
+
+### 安全退出流程
+
+```
+托盘"退出" → deps.requestQuit()
+  → if state === DRAWING: drawingEngine.stop() // 先抬笔
+  → app.quit()
+```
+
+`app.on('window-all-closed')` 不退出（保留系统托盘），仅通过"退出"菜单项主动退出。
+
+### 图标路径解析（两种模式）
+
+| 模式 | 路径 |
+|------|------|
+| dev | `__dirname/../../../resources/icons/tray/`（从 dist/main/main 回退到项目根） |
+| prod | `process.resourcesPath/icons/tray/`（electron-builder extraResources） |
+
+`package.json` 的 `extraResources` 新增 `{ "from": "resources/icons", "to": "icons" }`，确保打包后图标文件位于 asar 外可直接路径访问。

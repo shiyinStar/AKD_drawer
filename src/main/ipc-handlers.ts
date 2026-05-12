@@ -1,4 +1,3 @@
-import { writeFile } from 'node:fs/promises'
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { IPC_CHANNELS } from '../shared/types.js'
 import type { StatusState, ToastMessage } from '../shared/types.js'
@@ -15,6 +14,7 @@ export interface IpcHandlerDeps {
   enterPreview: () => void
   exitPreview: () => void
   drawingEngine: ReturnType<typeof createDrawingEngine>
+  exportLineArt: () => Promise<void>
 }
 
 export function registerIpcHandlers(deps: IpcHandlerDeps): void {
@@ -79,41 +79,7 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
   })
 
   ipcMain.handle('export-lineart', async () => {
-    const ctx = deps.getContext()
-    if (!ctx.lineArtBuffer) {
-      const win = deps.getMainWindow()
-      win?.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
-        type: 'warning',
-        message: '无线稿可导出',
-      } as ToastMessage)
-      return { success: false, reason: '无线稿可导出' }
-    }
-
-    const win = deps.getMainWindow()
-    const result = await dialog.showSaveDialog(win!, {
-      defaultPath: 'lineart.png',
-      filters: [{ name: 'PNG Image', extensions: ['png'] }],
-    })
-
-    if (result.canceled || !result.filePath) {
-      return { success: false }
-    }
-
-    try {
-      await writeFile(result.filePath, ctx.lineArtBuffer)
-      win?.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
-        type: 'success',
-        message: '线稿已导出',
-      } as ToastMessage)
-      return { success: true }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : '保存失败'
-      win?.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
-        type: 'error',
-        message: `导出失败: ${message}`,
-      } as ToastMessage)
-      return { success: false, reason: message }
-    }
+    await deps.exportLineArt()
   })
 
   ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, () => {
