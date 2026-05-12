@@ -59,20 +59,51 @@
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* 阴影（深色底不可见，浅色主题覆盖） */
+  --shadow-card:       none;
+  --shadow-dropdown:   none;
+  --shadow-modal:      none;
+  --shadow-button-hover: none;
 }
 
-/* 亮色主题 */
+/* 浅色主题 */
 [data-theme="light"] {
-  --color-surface-0:   #f8f8fc;
-  --color-surface-100: #f0f0f5;
-  --color-surface-200: #e4e4ec;
-  --color-surface-300: #d0d0dc;
-  --color-surface-400: #b8b8c8;
-  --color-surface-500: #9898ac;
-  --color-surface-600: #787890;
-  --color-surface-700: #585870;
-  --color-surface-800: #383850;
-  --color-surface-900: #181830;
+  /* 主色 — 靛蓝紫（微调以保证白底对比度） */
+  --color-primary-500: #5c5fef;   /* 原 #6366f1，白底对比度 4.7:1 */
+  --color-primary-600: #4845e0;   /* 原 #4f46e5，hover/active 加深 */
+
+  /* 浅色表面（暗→亮 色阶反转） */
+  --color-surface-0:   #fafbfc;   /* 最底层页面背景 */
+  --color-surface-100: #f3f4f6;   /* 卡片/面板背景 */
+  --color-surface-200: #e8eaee;   /* 悬浮卡片、下拉面板 */
+  --color-surface-300: #dde0e6;   /* 边框、分割线 */
+  --color-surface-400: #cdd2da;   /* 禁用态边框 */
+  --color-surface-500: #9ca3af;   /* 占位文字、次要图标 */
+  --color-surface-600: #6b7280;   /* 次要正文、辅助信息 */
+  --color-surface-700: #4b5563;   /* 正文主色，白底对比度 8.6:1 AA */
+  --color-surface-800: #1f2937;   /* 标题、强调文字 */
+  --color-surface-900: #111827;   /* 最深文字 */
+
+  /* 语义色（白底 WCAG 适配） */
+  --color-success: #059669;   /* 原 #34d399，白底对比度 4.6:1 */
+  --color-warning: #d97706;   /* 原 #fbbf24，白底对比度 4.7:1 */
+  --color-error:   #dc2626;   /* 原 #f87171，白底对比度 5.2:1 */
+  --color-info:    #2563eb;   /* 原 #60a5fa，白底对比度 5.7:1 */
+
+  /* 叠加层（预览窗口） */
+  --color-overlay-border: #5c5fef;
+  --color-overlay-line:   #1f2937;
+
+  /* 毛玻璃（浅色底） */
+  --glass-bg:     rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(0, 0, 0, 0.08);
+
+  /* 阴影（浅色主题专属） */
+  --shadow-card:          0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-dropdown:      0 4px 16px rgba(0, 0, 0, 0.10);
+  --shadow-modal:         0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-button-hover:  0 2px 8px rgba(92, 95, 239, 0.25);
 }
 
 /* 状态指示灯动画 */

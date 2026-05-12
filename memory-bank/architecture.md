@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-12 (阶段 11 完成)
+**最后更新**: 2026-05-12 (阶段 12 完成)
 
 ---
 
@@ -67,8 +67,13 @@ AKD_final/
 │   │   │   ├── StatusIndicator.vue # 5 状态指示灯（颜色+图标+动画+ARIA）
 │   │   │   ├── ToastContainer.vue  # Toast 通知容器（右下角固定）
 │   │   │   ├── ToastItem.vue       # 单条 Toast（毛玻璃+类型色条）
-│   │   │   ├── ErrorOverlay.vue      # ERROR 覆盖层（阶段 11 新增）
-│   │   │   └── SettingsPanel.vue   # 设置面板（占位）
+│   │   │   ├── ErrorOverlay.vue       # ERROR 覆盖层（阶段 11 新增）
+│   │   │   ├── SettingsPanel.vue      # 设置面板（阶段 12 重写）
+│   │   │   ├── SliderControl.vue      # 通用范围滑块（阶段 12 新增）
+│   │   │   ├── HotkeySettings.vue     # 快捷键设置分组（阶段 12 新增）
+│   │   │   ├── HotkeyRow.vue          # 单行快捷键（阶段 12 新增）
+│   │   │   ├── HotkeyCapture.vue      # 按键捕获弹窗（阶段 12 新增）
+│   │   │   └── FirstRunTips.vue       # 首次启动提示（阶段 12 新增）
 │   │   └── overlay/
 │   │       ├── index.html       # 叠加层 HTML 入口（Canvas + 缩放标签）
 │   │       └── main.ts          # 叠加层逻辑（Canvas 渲染 + 交互切换）
@@ -367,7 +372,41 @@ Vue 应用入口点：
 Toast 容器 — 阶段 4 新增。固定定位右下角（`bottom: 12px; right: 12px`），`z-index: 9999`。接收 `toasts` 数组 prop，通过 `TransitionGroup` 渲染列表。`pointer-events: none` 允许穿透，子项恢复 `auto`。`aria-live="polite"`。
 
 ### src/renderer/components/SettingsPanel.vue
-设置面板占位组件，仅显示居中 "设置" 文字（`--color-surface-500`）。阶段 12 将替换为完整设置表单。
+设置面板（阶段 12 重写）— 3 张圆角卡片：
+- **卡片 1 — 快捷键**：嵌入 `HotkeySettings`（4 行配置）
+- **卡片 2 — 绘制参数**：速度滑块 100~2000 px/s + 鼠标左右键 RadioGroup + 透明度滑块 0.3~0.8 + 线条颜色 `<input type="color">`
+- **卡片 3 — 关于**：版本号 + 技术栈 + 引擎说明
+- `onMounted` 通过 `getSettings()` IPC 读取配置并填充本地 `settings` ref
+- 所有修改通过 `updateSettings()` IPC 即时持久化到 `configStore`，`configStore.onDidChange` 自动触发快捷键重注册和叠加层实时更新
+
+### src/renderer/components/SliderControl.vue
+通用范围滑块组件（阶段 12 新增）：
+- Props：`label`、`modelValue`、`min`、`max`、`step`、`unit`
+- CSS `--fill-pct` 自定义属性驱动渐变填充（已走比例 → 主色，未走 → `--color-surface-400`）
+- 设置面板中复用 3 次
+
+### src/renderer/components/HotkeyRow.vue
+单行快捷键设置（阶段 12 新增）：
+- 键帽渲染：`keyValue.split('+')` 拆分组合键 → 逐个 `<span class="keycap">`（`--color-surface-300` 背景 + `box-shadow: 0 2px 0 --color-surface-400` 立体感）
+- [修改] 按钮 → 打开 `HotkeyCapture`、[恢复默认] 按钮 → emit 默认键值
+
+### src/renderer/components/HotkeyCapture.vue
+按键捕获弹窗（阶段 12 新增）：
+- `window.addEventListener('keydown', onKeyDown, true)` capture 阶段拦截
+- 构建组合键字符串：Ctrl/Shift/Alt/Meta + 非修饰键大写化
+- 排除纯修饰键，Esc 取消，Enter 确认
+
+### src/renderer/components/HotkeySettings.vue
+快捷键设置分组容器（阶段 12 新增）：
+- 4 行 `HotkeyRow`：预览（F5）/ 开始绘制（F6）/ 停止绘制（F7）/ 预览穿透（Ctrl+Shift+F9）
+- 接收当前 `hotkeys` 对象 prop，emit `update(key, value)` 向上冒泡
+
+### src/renderer/components/FirstRunTips.vue
+首次启动快捷键速查（阶段 12 新增）：
+- 全屏毛玻璃遮罩（`z-index: 10001`）+ 居中卡片，显示 4 个快捷键键帽 + 功能描述
+- `onMounted` 通过 `getSettings()` 读取实际配置的快捷键值
+- "知道了"按钮 → emit `dismiss` → App.vue 调用 `updateSettings({ hasSeenShortcutTips: true })` 持久化
+- 标志位 `hasSeenShortcutTips: boolean` 存储于 `configStore`（schema 默认 `false`）
 
 ### src/workers/inference/worker.ts
 ONNX Runtime 推理 Worker — 阶段 5 实现：
@@ -862,3 +901,135 @@ App.vue: :appStatus="appStatus" :errorInfo="errorInfo"
 **为什么是 props 而非 provide/inject？** 初始实现使用 provide/inject 避免 prop drilling。实测发现 `<KeepAlive>` 缓存组件中，inject 返回的 Ref 在模板绑定中存在响应性边界情况——状态变更后 `v-if` 条件不触发重新渲染。改为 props 后响应性链路完全确定。
 
 **ImagePanel 前端状态重置**：`watch(() => props.appStatus)` 检测 `ERROR → NOT_READY`（用户点击重试后），自动清除 `hasImage`/`originalSrc`/`lineArtSrc`/`isProcessing` 四个前端 ref，还原为空拖拽区。与主进程 `RETRY_FROM_ERROR` 的 Buffer 清空构成前后端双重重置。
+
+## 设置面板架构洞察（阶段 12）
+
+### SettingsPanel 组件树与数据流
+
+```
+SettingsPanel.vue
+  ├── HotkeySettings.vue
+  │     └── HotkeyRow.vue (×4)
+  │           └── HotkeyCapture.vue (条件渲染)
+  ├── SliderControl.vue (×3: 速度/透明度 + 颜色)
+  └── 内联 radio-group / color-picker
+```
+
+**数据流**：
+1. `onMounted` → `getSettings()` IPC → `configStore.getAll()` → 填充本地 `settings` ref
+2. 用户修改 → 立即写入本地 ref + 调用 `updateSettings({ [key]: value })` IPC → `configStore.set()`
+3. `configStore.onDidChange` 自动通知快捷键管理器（hotkeys 变更）和叠加窗口（opacity/lineColor 变更）
+
+### SliderControl.vue
+通用范围滑块组件（`src/renderer/components/SliderControl.vue`）：
+- Props：`label`、`modelValue`（number）、`min`、`max`、`step`（默认 1）、`unit`（可选）
+- Emit：`update:modelValue`（v-model 协议）
+- 视觉：CSS `--fill-pct` 自定义属性驱动渐变填充，13px 白底主色边框圆形滑块，拖动放大至 18px
+- 设置面板中复用 3 次（速度/透明度 + 颜色取值）
+
+### HotkeyRow.vue
+单行快捷键设置组件（`src/renderer/components/HotkeyRow.vue`）：
+- Props：`label`（中文名）、`keyValue`（当前键值，如 `'Ctrl+Shift+F9'`）、`defaultKey`（默认键值）
+- Emit：`update`（新键值字符串）
+- 键帽渲染：`keyValue.split('+')` 拆分组合键 → 逐个 `<span class="keycap">` 渲染
+- 键帽样式：`--color-surface-300` 背景 + `box-shadow: 0 2px 0 --color-surface-400` 模拟立体感
+- [修改] 按钮 → 打开 `HotkeyCapture` 覆盖层
+- [恢复默认] 按钮 → emit 默认键值
+
+### HotkeyCapture.vue
+全屏按键捕获弹窗（`src/renderer/components/HotkeyCapture.vue`）：
+- Props：`visible`、`currentKey`
+- Emit：`close`、`confirm(key)`
+- 捕获逻辑：`window.addEventListener('keydown', onKeyDown, true)` （capture 阶段）
+- 组合键构建：Ctrl/Shift/Alt/Meta 修饰键 → 拼接非修饰键（`e.key` 大写化）
+- 排除纯修饰键（单独按 Ctrl/Shift/Alt/Meta 不捕获）
+- Esc → emit('close')、Enter → emit('confirm')
+
+### HotkeySettings.vue
+快捷键设置分组容器（`src/renderer/components/HotkeySettings.vue`）：
+- Props：`hotkeys: { preview, startDraw, stopDraw, toggleOverlay }`
+- Emit：`update(key, value)`
+- 4 行 HotkeyRow：进入/退出预览（F5）、开始绘制（F6）、停止绘制（F7）、预览/穿透（Ctrl+Shift+F9）
+- 默认值 Record：`{ preview: 'F5', startDraw: 'F6', stopDraw: 'F7', toggleOverlay: 'Ctrl+Shift+F9' }`
+
+## 主题系统架构洞察（阶段 12）
+
+### 主题切换数据流
+
+```
+SideNav.vue: 点击 Moon/Sun 按钮
+  → emit('toggle-theme')
+    → App.vue: toggleTheme()
+      → theme.value = 'dark' ↔ 'light'
+      → :data-theme="theme" 绑定更新
+        → 浏览器重新解析所有 var(--color-*) 为 [data-theme="light"] 对应值
+        → CSS 零开销全站换色
+```
+
+**关键设计决策**：主题状态仅存在于渲染进程（`App.vue` 的 `ref`），不持久化。原因是：用户通常偏好与 OS 主题一致，每次启动默认深色即可。如需持久化，可加入 `configStore`。
+
+### 阴影 Token 系统
+
+```
+:root {
+  --shadow-card:         none;    // 深色底阴影不可见
+  --shadow-dropdown:     none;
+  --shadow-modal:        none;
+  --shadow-button-hover: none;
+}
+
+[data-theme="light"] {
+  --shadow-card:         0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-dropdown:     0 4px 16px rgba(0,0,0,0.10);
+  --shadow-modal:        0 8px 32px rgba(0,0,0,0.12);
+  --shadow-button-hover: 0 2px 8px rgba(92,95,239,0.25);
+}
+```
+
+| Token | 使用场景 | 文件 |
+|-------|---------|------|
+| `--shadow-card` | 设置面板卡片 | SettingsPanel.vue |
+| `--shadow-modal` | 按键捕获弹窗、首次启动提示 | HotkeyCapture.vue、FirstRunTips.vue |
+| `--shadow-dropdown` | Toast 通知 | ToastItem.vue |
+| `--shadow-button-hover` | 主色填充按钮 hover 态 | PanelToolbar、ErrorOverlay、FirstRunTips、HotkeyCapture |
+
+### 面板背景三层显式设置
+
+阶段 12 发现：面板背景不能依赖 CSS 继承链（`body → app-layout → ...`），必须在以下层级各自显式设置 `background: var(--color-surface-0)`：
+
+| 层 | 文件 | 原因 |
+|----|------|------|
+| ContentRouter | ContentRouter.vue | `<Transition mode="out-in">` 间隙可见，依赖继承会闪现 |
+| ImagePanel | ImagePanel.vue | 图片面板内容区独立于 ContentRouter 的 flex 布局 |
+| SettingsPanel | SettingsPanel.vue | 设置面板独立于 ContentRouter 的 flex 布局 |
+
+## 叠加层设置实时同步洞察（阶段 12）
+
+### 架构
+
+```
+SettingsPanel: updateSettings({ overlayOpacity: 0.5 })
+  → IPC UPDATE_SETTINGS
+    → configStore.set('overlayOpacity', 0.5)
+      → configStore.onDidChange('overlayOpacity') 触发
+        → index.ts 监听器: getOverlayWindow()?.setOpacity(0.5)
+      → configStore.onDidChange('overlayLineColor') 触发
+        → index.ts 监听器: overlay.webContents.send('overlay-line-color', '#333')
+          → overlay/main.ts: lineColor = '#333'; render()
+```
+
+**为什么在 `index.ts` 中而非 `ipc-handlers.ts` 中处理？** IPC handler 只负责数据持久化，不持有窗口引用。`index.ts` 是唯一同时持有 `configStore` 和 `getOverlayWindow` 的模块。复用 `configStore.onDidChange` 模式（与快捷键管理器的 hotkeys 重注册一致），解耦设置写入和副作用触发。
+
+## 首次启动提示洞察（阶段 12）
+
+### FirstRunTips.vue
+- `src/renderer/components/FirstRunTips.vue`：全屏半透明遮罩（`z-index: 10001`）+ 居中卡片
+- `onMounted` 中通过 `getSettings()` 读取当前配置的快捷键值（非硬编码默认值）
+- 点击"知道了" → emit `dismiss` → App.vue 调用 `updateSettings({ hasSeenShortcutTips: true })` 持久化
+- 标志位 `hasSeenShortcutTips` 存储在 `configStore`（`config.json`），重启后不再显示
+
+### GET_SETTINGS IPC 通道
+- 方向：Renderer → Main（invoke）
+- 类型：`src/shared/types.ts` → `IPC_CHANNELS.GET_SETTINGS: 'get-settings'`
+- Handler：`ipcMain.handle` → `deps.configStore.getAll()` → 返回完整 `AppConfig`
+- 使用场景：SettingsPanel 初始化、FirstRunTips 读取快捷键值

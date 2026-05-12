@@ -35,6 +35,7 @@ const panels: Record<string, unknown> = {
   flex: 1;
   overflow: hidden;
   display: flex;
+  background: var(--color-surface-0);
 }
 
 .panel-enter-active,

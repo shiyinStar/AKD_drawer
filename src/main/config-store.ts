@@ -38,6 +38,10 @@ const schema = {
     type: 'string',
     default: '#000000',
   },
+  hasSeenShortcutTips: {
+    type: 'boolean',
+    default: false,
+  },
 } as const
 
 export interface ConfigStoreOptions {

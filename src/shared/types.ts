@@ -31,6 +31,7 @@ export interface AppConfig {
   mouseButton: 'left' | 'right'
   overlayOpacity: number
   overlayLineColor: string
+  hasSeenShortcutTips: boolean
 }
 
 export interface PipelineProgress {
@@ -63,6 +64,7 @@ export const IPC_CHANNELS = {
   SHOW_TOAST: 'show-toast',
   GET_IMAGE_DATA: 'get-image-data',
   OPEN_FILE_DIALOG: 'open-file-dialog',
+  GET_SETTINGS: 'get-settings',
 } as const
 
 export interface ToastMessage {

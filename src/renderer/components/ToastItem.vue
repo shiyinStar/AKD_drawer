@@ -59,6 +59,7 @@ onMounted(() => {
   backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-2);
+  box-shadow: var(--shadow-dropdown);
   position: relative;
   overflow: hidden;
   animation: toast-enter 300ms cubic-bezier(0.16, 1, 0.3, 1);

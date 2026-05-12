@@ -64,6 +64,7 @@ defineEmits<{
 .btn--primary:hover {
   background: var(--color-primary-600);
   transform: translateY(-1px);
+  box-shadow: var(--shadow-button-hover);
 }
 
 .btn--primary:active {

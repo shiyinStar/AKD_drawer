@@ -98,6 +98,10 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
     return { success: true }
   })
 
+  ipcMain.handle(IPC_CHANNELS.GET_SETTINGS, () => {
+    return deps.configStore.getAll()
+  })
+
   ipcMain.handle(IPC_CHANNELS.UPDATE_SETTINGS, async (_event, partialSettings: Record<string, unknown>) => {
     try {
       const store = deps.configStore as { set: (k: string, v: unknown) => void }

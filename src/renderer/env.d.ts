@@ -22,6 +22,7 @@ interface ElectronAPI {
   ): void
   importImage(filePath: string): Promise<unknown>
   retryFromError(): Promise<unknown>
+  getSettings(): Promise<unknown>
   updateSettings(partialSettings: Record<string, unknown>): Promise<unknown>
   exportLineArt(): Promise<unknown>
   windowMinimize(): Promise<void>

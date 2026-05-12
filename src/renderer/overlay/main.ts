@@ -16,6 +16,7 @@ declare global {
       onSetInteractive(callback: (interactive: boolean) => void): void
       setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>
       sendScaleChanged(scale: number, width: number, height: number): void
+      onLineColorChange(callback: (color: string) => void): void
     }
   }
 }
@@ -170,6 +171,11 @@ function setInteractive(active: boolean): void {
 
 window.overlayAPI.onSetInteractive((active) => {
   setInteractive(active)
+})
+
+window.overlayAPI.onLineColorChange((color) => {
+  lineColor = color
+  render()
 })
 
 window.overlayAPI.onInit((data) => {

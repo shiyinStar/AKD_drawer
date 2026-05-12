@@ -103,6 +103,7 @@ const emit = defineEmits<{
 .error-overlay__retry-btn:hover {
   background: var(--color-primary-600);
   transform: translateY(-1px);
+  box-shadow: var(--shadow-button-hover);
 }
 
 .error-overlay__retry-btn:active {

@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   retryFromError: (): Promise<unknown> =>
     ipcRenderer.invoke(IPC_CHANNELS.RETRY_FROM_ERROR),
 
+  getSettings: (): Promise<unknown> =>
+    ipcRenderer.invoke(IPC_CHANNELS.GET_SETTINGS),
+
   updateSettings: (
     partialSettings: Record<string, unknown>,
   ): Promise<unknown> =>

@@ -183,6 +183,21 @@ app.whenReady().then(() => {
     drawingEngine.stop()
   }
 
+  // 叠加层设置实时同步
+  ctx.configStore.onDidChange('overlayOpacity', (newVal) => {
+    const overlay = getOverlayWindow()
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.setOpacity(newVal)
+    }
+  })
+
+  ctx.configStore.onDidChange('overlayLineColor', (newVal) => {
+    const overlay = getOverlayWindow()
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.webContents.send('overlay-line-color', newVal)
+    }
+  })
+
   const shortcutManager = createShortcutManager({
     stateMachine: ctx.stateMachine,
     configStore: ctx.configStore,

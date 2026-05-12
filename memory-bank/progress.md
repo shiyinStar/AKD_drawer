@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-12 (阶段 11 完成)
+**最后更新**: 2026-05-12 (阶段 12 完成)
 
 ---
 
@@ -875,7 +875,107 @@
 
 ---
 
-## 下一步：阶段 12 — 设置面板
+## 阶段 12：设置面板 + 主题系统 + 首次启动提示 ✅ 完成
+
+### 步骤 12.1 — SliderControl 通用组件 ✅
+- `src/renderer/components/SliderControl.vue` 创建：
+  - Props：`label`、`modelValue`（number）、`min`、`max`、`step`、`unit`
+  - 自定义样式 range 滑块：轨道 4px + 渐变填充 + 13px 圆形滑块（拖动放大至 18px）
+  - 右侧等宽字体数值显示（含单位）
+  - v-model 双向绑定
+
+### 步骤 12.2 — 快捷键设置 UI ✅
+- `src/renderer/components/HotkeyRow.vue`：单行快捷键（键帽样式 + 修改按钮 + 恢复默认）
+- `src/renderer/components/HotkeyCapture.vue`：全屏遮罩按键捕获弹窗（组合键捕获，Esc 取消，Enter 确认）
+- `src/renderer/components/HotkeySettings.vue`：4 行快捷键配置（预览/开始绘制/停止绘制/预览穿透）
+
+### 步骤 12.3 — 设置面板完整组装 ✅
+- `src/renderer/components/SettingsPanel.vue` 从占位重写为完整设置页：
+  - 卡片 1：快捷键设置（HotkeySettings）
+  - 卡片 2：绘制参数（速度滑块 100~2000 / 鼠标左右键 / 透明度 0.3~0.8 / 线条颜色）
+  - 卡片 3：关于（版本号 + 技术栈 + 引擎说明）
+  - 所有修改通过 `updateSettings` IPC 即时持久化
+- 新增 `GET_SETTINGS` IPC 通道（types.ts → ipc-handlers.ts → preload → env.d.ts）
+
+### 步骤 12.4 — 主题系统（深色/浅色切换） ✅
+- `App.vue`：`theme` ref 驱动动态 `:data-theme` 绑定 + `toggleTheme()` 方法
+- `SideNav.vue`：移除"关于"按钮，原位置添加主题切换（Moon/Sun 图标 + "深色"/"浅色"文字标识）
+- `tokens.css`：浅色主题全套 WCAG 适配配色（主色微调至白底对比度 4.7:1、语义色加深、表面色阶精准 9 阶）
+- 新增 4 级阴影 Token：`--shadow-card` / `--shadow-modal` / `--shadow-dropdown` / `--shadow-button-hover`（深色主题为 `none`）
+- 阴影已应用到：设置卡片、弹窗、Toast、主按钮 hover 态
+
+### 步骤 12.5 — 叠加层设置实时同步 ✅
+- `index.ts`：`configStore.onDidChange` 监听 `overlayOpacity` → `setOpacity()` / `overlayLineColor` → IPC 推送
+- `overlay.ts` preload：新增 `onLineColorChange` 监听
+- `overlay/main.ts`：接收新颜色 → 更新 `lineColor` 变量 → `render()` 重绘
+- 用户修改透明度或线条颜色后，已打开的预览窗口即时响应，无需重新呼出
+
+### 步骤 12.6 — 首次启动快捷键提示 ✅
+- `src/renderer/components/FirstRunTips.vue`：全屏毛玻璃遮罩 + 居中卡片，显示 4 个快捷键键帽 + 功能描述
+- `config-store.ts`：新增 `hasSeenShortcutTips: boolean`（默认 `false`）
+- `App.vue`：`onMounted` 检查标志 → 未看过则显示 → 点击"知道了"持久化
+- 快捷键值从实际配置读取（非硬编码默认值）
+
+### 主题切换 Bug 修复
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| 浅色主题下图片面板背景不切换 | `ImagePanel.vue` 的 `.image-panel__content` 无显式背景 | 添加 `background: var(--color-surface-0)` |
+| 浅色主题下设置面板背景仍为深色 | `SettingsPanel.vue` 无显式背景 | 添加 `background: var(--color-surface-0)` |
+| 切换面板时背景闪烁深色 | `ContentRouter.vue` 在 Transition 间隙无背景 | 添加 `background: var(--color-surface-0)` |
+
+### 新增/修改文件清单
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/shared/types.ts` | 修改 | IPC_CHANNELS 新增 `GET_SETTINGS`；AppConfig 新增 `hasSeenShortcutTips` |
+| `src/main/ipc-handlers.ts` | 修改 | 新增 `GET_SETTINGS` handler |
+| `src/main/config-store.ts` | 修改 | schema 新增 `hasSeenShortcutTips` |
+| `src/preload/index.ts` | 修改 | 新增 `getSettings()` |
+| `src/preload/overlay.ts` | 修改 | 新增 `onLineColorChange()` |
+| `src/renderer/env.d.ts` | 修改 | ElectronAPI 新增 `getSettings()` |
+| `src/renderer/App.vue` | 修改 | 动态主题 + FirstRunTips 集成 |
+| `src/renderer/components/FirstRunTips.vue` | 新增 | 首次启动快捷键提示 |
+| `src/renderer/components/SliderControl.vue` | 新增 | 通用滑块组件 |
+| `src/renderer/components/HotkeyCapture.vue` | 新增 | 按键捕获弹窗 |
+| `src/renderer/components/HotkeyRow.vue` | 新增 | 快捷键行 |
+| `src/renderer/components/HotkeySettings.vue` | 新增 | 快捷键设置区（4 行） |
+| `src/renderer/components/SettingsPanel.vue` | 重写 | 完整设置面板（3 卡片） |
+| `src/renderer/components/SideNav.vue` | 修改 | 移除关于按钮 → 添加主题切换 |
+| `src/renderer/components/ContentRouter.vue` | 修改 | 添加显式背景 |
+| `src/renderer/components/ImagePanel.vue` | 修改 | 添加显式背景 |
+| `src/renderer/components/ToastItem.vue` | 修改 | 添加 `--shadow-dropdown` |
+| `src/renderer/components/PanelToolbar.vue` | 修改 | hover 添加 `--shadow-button-hover` |
+| `src/renderer/components/ErrorOverlay.vue` | 修改 | hover 添加 `--shadow-button-hover` |
+| `src/renderer/styles/tokens.css` | 修改 | 浅色主题 WCAG 配色 + 阴影 Token |
+| `src/renderer/overlay/main.ts` | 修改 | 监听 `onLineColorChange` 重绘 |
+| `src/main/index.ts` | 修改 | 叠加层设置实时同步监听器 |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1560 模块 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/shortcut-manager.test.ts` | 13/13 通过 |
+| `npx tsx --test tests/unit/drawing-engine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/geometry-utils.test.ts` | 3/3 通过 |
+| **总测试数** | **69** |
+
+### 注意事项
+- 浅色主题阴影 Token 在 `:root` 中设为 `none`，仅在 `[data-theme="light"]` 中赋值。深色主题下阴影不可见，但 token 仍可安全使用
+- `hasSeenShortcutTips` 标记持久化到 `config.json`。重置配置后首次启动提示会重新出现
+- 叠加层设置实时同步通过 `configStore.onDidChange` 实现，与快捷键管理器的配置监听模式一致
+- 面板背景必须在 ContentRouter / ImagePanel / SettingsPanel 三个层级各自显式设置，依赖 body 继承在 Transition 动画期间不可靠
+- toggleOverlay 快捷键已在设置面板中显示，中文名为"预览/穿透"，默认值 `Ctrl+Shift+F9`
+
+---
+
+## 下一步：阶段 13 — 导出线稿
 
 ---
 

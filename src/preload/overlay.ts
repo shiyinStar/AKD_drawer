@@ -25,4 +25,8 @@ contextBridge.exposeInMainWorld('overlayAPI', {
   sendScaleChanged(scale: number, width: number, height: number): void {
     ipcRenderer.send(OVERLAY_SCALE_CHANGED, { scale, width, height })
   },
+
+  onLineColorChange(callback: (color: string) => void): void {
+    ipcRenderer.on('overlay-line-color', (_event, color: string) => callback(color))
+  },
 })

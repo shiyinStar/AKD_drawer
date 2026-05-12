@@ -7,12 +7,19 @@ import ContentRouter from './components/ContentRouter.vue'
 import StatusBar from './components/StatusBar.vue'
 import StatusIndicator from './components/StatusIndicator.vue'
 import ToastContainer from './components/ToastContainer.vue'
+import FirstRunTips from './components/FirstRunTips.vue'
 
 const activePanel = ref<string>('image')
+const theme = ref<'dark' | 'light'>('dark')
+
+function toggleTheme() {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark'
+}
 const appStatus = ref<StatusState>('NOT_READY' as StatusState)
 const statusExtra = ref<string>('等待导入图片')
 const isPipelineRunning = ref(false)
 const errorInfo = ref<ErrorInfo | null>(null)
+const showTips = ref(false)
 
 function updateStatusExtra() {
   if (appStatus.value === 'NOT_READY') {
@@ -118,14 +125,34 @@ onMounted(async () => {
       statusExtra.value = `${data.scale}x`
     }
   })
+
+  // 首次启动快捷键提示
+  try {
+    const config = await window.electronAPI.getSettings() as { hasSeenShortcutTips?: boolean }
+    if (!config?.hasSeenShortcutTips) {
+      showTips.value = true
+    }
+  } catch {
+    // 无法读取配置，显示提示
+    showTips.value = true
+  }
 })
+
+async function dismissTips() {
+  showTips.value = false
+  try {
+    await window.electronAPI.updateSettings({ hasSeenShortcutTips: true })
+  } catch {
+    // 保存失败静默忽略
+  }
+}
 </script>
 
 <template>
-  <div class="app-layout" data-theme="dark">
+  <div class="app-layout" :data-theme="theme">
     <TitleBar />
     <div class="app-layout__body">
-      <SideNav v-model:activePanel="activePanel" />
+      <SideNav v-model:activePanel="activePanel" :theme="theme" @toggle-theme="toggleTheme" />
       <ContentRouter :activePanel="activePanel" :appStatus="appStatus" :errorInfo="errorInfo" />
     </div>
     <StatusBar>
@@ -134,6 +161,7 @@ onMounted(async () => {
       </template>
     </StatusBar>
     <ToastContainer :toasts="toasts" @remove="removeToast" />
+    <FirstRunTips v-if="showTips" @dismiss="dismissTips" />
   </div>
 </template>
 

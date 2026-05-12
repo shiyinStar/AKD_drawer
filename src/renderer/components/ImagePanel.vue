@@ -123,5 +123,6 @@ onMounted(() => {
   display: flex;
   flex: 1;
   overflow: hidden;
+  background: var(--color-surface-0);
 }
 </style>
