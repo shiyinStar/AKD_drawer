@@ -5,6 +5,8 @@ import { createAppContext } from './app-context.js'
 import type { AppContext } from './app-context.js'
 import { registerIpcHandlers } from './ipc-handlers.js'
 import { createPipelineOrchestrator } from './pipeline-orchestrator.js'
+import { createOverlay, destroyOverlay } from './preview-overlay.js'
+import { StatusState } from '../shared/types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -70,11 +72,49 @@ app.whenReady().then(() => {
     stateMachine: ctx.stateMachine,
   })
 
+  function enterPreview(): void {
+    const state = ctx.stateMachine.getState()
+    if (state !== StatusState.IDLE) return
+
+    const paths = ctx.paths
+    const boundingBox = ctx.boundingBox
+    if (!paths || !boundingBox || paths.length === 0) return
+
+    ctx.stateMachine.transition(StatusState.PREVIEWING)
+    win.webContents.send('app-state', StatusState.PREVIEWING)
+
+    const config = ctx.configStore.getAll()
+    createOverlay({
+      paths,
+      boundingBox,
+      lineColor: config.overlayLineColor,
+      opacity: config.overlayOpacity,
+    })
+  }
+
+  function exitPreview(): void {
+    const state = ctx.stateMachine.getState()
+    if (state !== StatusState.PREVIEWING) return
+
+    destroyOverlay()
+    ctx.stateMachine.transition(StatusState.IDLE)
+    win.webContents.send('app-state', StatusState.IDLE)
+  }
+
+  // 状态机监听器：非预览状态退出时销毁叠加窗口
+  ctx.stateMachine.onStateChange(({ from, to }) => {
+    if (from === StatusState.PREVIEWING && to !== StatusState.PREVIEWING) {
+      destroyOverlay()
+    }
+  })
+
   registerIpcHandlers({
     getState: () => ctx.stateMachine.getState(),
     getMainWindow: () => ctx.mainWindow,
     getContext: () => ctx,
     runPipeline: (buffer: Buffer) => pipeline.run(buffer),
+    enterPreview,
+    exitPreview,
   })
 })
 

@@ -4,12 +4,15 @@ import { IPC_CHANNELS } from '../shared/types.js'
 import type { StatusState, ToastMessage } from '../shared/types.js'
 import type { AppContext } from './app-context.js'
 import { handleImportImage, handleImportImageFromBase64 } from './image-import-handler.js'
+import { getOverlayWindow } from './preview-overlay.js'
 
 export interface IpcHandlerDeps {
   getState: () => StatusState
   getMainWindow: () => BrowserWindow | null
   getContext: () => AppContext
   runPipeline: (imageBuffer: Buffer) => Promise<void>
+  enterPreview: () => void
+  exitPreview: () => void
 }
 
 export function registerIpcHandlers(deps: IpcHandlerDeps): void {
@@ -137,5 +140,28 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
+  })
+
+  // 叠加层 IPC 处理
+  ipcMain.handle('overlay-set-bounds', (_event, bounds: { x: number; y: number; width: number; height: number }) => {
+    const overlay = getOverlayWindow()
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.setBounds(bounds)
+    }
+  })
+
+  // 叠加层缩放变更 → 转发至主渲染进程
+  ipcMain.on('overlay-scale-changed', (_event, data: { scale: number; width: number; height: number }) => {
+    const win = deps.getMainWindow()
+    win?.webContents.send(IPC_CHANNELS.OVERLAY_SCALE_CHANGED, data)
+  })
+
+  // 进入/退出预览
+  ipcMain.handle(IPC_CHANNELS.OVERLAY_ENTER_PREVIEW, () => {
+    deps.enterPreview()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.OVERLAY_EXIT_PREVIEW, () => {
+    deps.exitPreview()
   })
 }

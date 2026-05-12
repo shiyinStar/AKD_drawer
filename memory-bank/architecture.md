@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-11 (阶段 5 集成修复完成)
+**最后更新**: 2026-05-12 (阶段 7 完成)
 
 ---
 
@@ -31,8 +31,10 @@ AKD_final/
 │   │   ├── config-store.ts        # 配置存储
 │   │   ├── worker-manager.ts       # Worker 生命周期管理
 │   │   ├── pipeline-orchestrator.ts # 管线编排器
+│   │   ├── preview-overlay.ts       # 叠加窗口管理 + 全局快捷键
 │   ├── preload/
-│   │   └── index.ts          # contextBridge preload 脚本
+│   │   ├── index.ts          # 主窗口 contextBridge preload
+│   │   └── overlay.ts        # 叠加窗口 contextBridge preload
 │   ├── shared/
 │   │   └── types.ts          # 核心类型、枚举、IPC 通道常量
 │   ├── renderer/
@@ -55,6 +57,9 @@ AKD_final/
 │   │   │   ├── ToastContainer.vue  # Toast 通知容器（右下角固定）
 │   │   │   ├── ToastItem.vue       # 单条 Toast（毛玻璃+类型色条）
 │   │   │   └── SettingsPanel.vue   # 设置面板（占位）
+│   │   └── overlay/
+│   │       ├── index.html       # 叠加层 HTML 入口（Canvas + 缩放标签）
+│   │       └── main.ts          # 叠加层逻辑（Canvas 渲染 + 交互切换）
 │   │   └── styles/
 │   │       ├── global.css    # CSS reset + 暗色主题 + 滚动条样式
 │   │       ├── tokens.css    # 全局设计 Token（颜色/间距/圆角/动画）
@@ -345,14 +350,48 @@ ONNX Runtime 推理 Worker — 阶段 5 实现：
 - 30s 超时保护 + 错误消息回传
 
 ### src/workers/path-extraction/worker.ts
-OpenCV.js 路径提取 Worker — 阶段 6 实现：
-- **OpenCV 依赖**：使用 `@dalongrong/opencv-wasm`（v4.8.1，CJS 包），通过 `createRequire(import.meta.url)` 同步加载（~75ms），本地 `.wasm` 文件无需 CDN
-- **PNG 解码**：`sharp` 解码 PNG Buffer → raw 灰度像素 → `cv.matFromArray()` 构建 Mat（因该 OpenCV 构建不含 `imgcodecs` 模块，无 `cv.imdecode`）
-- **处理流程**：`cv.threshold(binary, 128, THRESH_BINARY)` 二值化 → `cv.bitwise_not(inverted)` 反转 → `cv.findContours(inverted, contours, hierarchy, RETR_LIST, CHAIN_APPROX_NONE)` 像素级轮廓 → `cv.approxPolyDP(contour, approx, 1.0, false)` 简化
-- 过滤 < 3 点的极小轮廓，提取 `{x, y}[]` 坐标序列
-- 按首点 Y 升序（Y 相同 X 升序）排序路径
-- 无有效轮廓 → `{ type: 'error', message: '未检测到可绘制线条' }`
+路径提取 Worker — 阶段 6~7：
+- **OpenCV 依赖**：`@dalongrong/opencv-wasm`（v4.8.1，CJS），通过 `createRequire(import.meta.url)` 同步加载
+- **预处理**（OpenCV）：`GaussianBlur(3,3)` 降噪 → `THRESH_BINARY_INV | THRESH_OTSU` 自适应阈值 → `MORPH_CLOSE(2,2)` 闭合断线
+- **骨架化**（纯 TypeScript）：Zhang-Suen 迭代细化算法，将白色线条区域缩减为 1px 宽中心线骨架
+- **路径追踪**（纯 TypeScript）：从端点出发沿骨架走，在交叉点分叉，生成单线路径；孤立闭合环单独处理
+- 过滤 < 3 点的路径，按首点 Y 升序排序
 - 所有 `cv.Mat` 使用完毕调用 `.delete()` 释放 WASM 内存
+- **⚠ 算法演进**：阶段 6 使用 `findContours`（轮廓描边）→ 阶段 7 替换为骨架化 + 追踪（单线中心线），解决了粗线变双线的问题
+
+### src/main/preview-overlay.ts
+叠加窗口管理 + 全局快捷键 — 阶段 7 新增：
+- `createOverlay({ paths, boundingBox, lineColor, opacity })` — 创建透明置顶无框叠加窗口
+  - 初始尺寸 = boundingBox.size，主屏幕居中
+  - 加载 `dist/renderer/overlay/index.html`（dev 模式走 Vite dev server）
+  - 500ms 定时器强制 `setAlwaysOnTop(true, 'screen-saver')`
+  - 默认进入交互模式（可直接拖拽/缩放）
+- `destroyOverlay()` — 销毁窗口 + 清理定时器 + 注销全局快捷键
+- `getOverlayWindow()` — 获取叠加窗口引用
+- 全局快捷键：`Ctrl+Shift+F9` 切换交互/穿透模式（`registerOverlayShortcut`/`unregisterOverlayShortcut`）
+- 交互模式：`setIgnoreMouseEvents(false)` + 发送 `overlay-set-interactive: true` → 渲染侧显示手柄
+- 穿透模式：`setIgnoreMouseEvents(true)` + 发送 `overlay-set-interactive: false` → 隐藏手柄
+- **⚠ 阶段 10 提醒**：`Ctrl+Shift+F9` 需在快捷键管理器中实现为可配置项
+
+### src/renderer/overlay/index.html
+叠加层独立 HTML 页面 — 阶段 7 新增：
+- 最小页面结构：`<canvas>` + 缩放标签 `<div>`
+- Vite 多页面构建的第二个入口（与主窗口 `index.html` 并列）
+
+### src/renderer/overlay/main.ts
+叠加层 Canvas 渲染与交互逻辑 — 阶段 7 新增：
+- Canvas 2D 路径渲染：devicePixelRatio 适配、坐标映射、线宽 2px、虚线边框 `[4,4]`
+- 交互模式切换：`onSetInteractive` IPC → 显示/隐藏四角缩放手柄（8×8px 蓝色方块）
+- 拖拽移动：绝对坐标计算（`winStart + delta`），避免累积漂移
+- 四角等比缩放：锁定宽高比，0.5x~3.0x，nw/sw 角自动调整 X、nw/ne 角自动调整 Y
+- 浮动缩放标签："1.5x 960×540"（半透明黑底白字）
+- 缩放变更通过 `sendScaleChanged` IPC 实时同步到主窗口状态栏
+
+### src/preload/overlay.ts
+叠加层 contextBridge preload — 阶段 7 新增：
+- 暴露 `window.overlayAPI`：`onInit`、`onSetInteractive`、`setBounds`、`sendScaleChanged`
+- 必须编译为 CJS（`.cjs`），与主窗口 preload 相同的构建策略
+- 由 `scripts/build-main.mjs` 第三个 esbuild 构建产出
 
 ### src/shared/geometry-utils.ts
 几何工具函数 — 阶段 6 新增：
@@ -378,9 +417,43 @@ Worker 生命周期管理器 — 阶段 5~6：
 - 推理或路径提取失败 → 状态机转 `ERROR` → 推送 `APP_ERROR`（路径提取错误含针对性建议）
 - 在 `IMPORT_IMAGE` 成功后通过 `IpcHandlerDeps.runPipeline` 回调自动触发
 
+### 叠加层交互模式（阶段 7 最终方案）
+
+叠加层有三种交互控制方式，按优先级排列：
+
+| 方式 | 触发 | 说明 |
+|------|------|------|
+| 默认进入 | `createOverlay` → `did-finish-load` → `setOverlayInteractive(true)` | 进入预览即交互模式，可直接拖拽/缩放 |
+| 全局快捷键 | `Ctrl+Shift+F9` | 切换交互/穿透模式，任何窗口都能触发 |
+| 退出预览 | `destroyOverlay` | 自动注销快捷键，清理定时器 |
+
+**为什么需要全局快捷键？** Electron 中键盘事件只能送达焦点窗口。叠加窗口通过 `setIgnoreMouseEvents(true)` 让鼠标穿透到下层软件，但也使得点击无法让叠加窗口重新获得焦点 → 键盘事件不再送达 → Ctrl 检测失效。全局快捷键通过 `globalShortcut.register` 在 Main Process 侧注册，不依赖任何窗口的焦点状态。
+
+**为什么每 500ms 重新置顶？** 部分绘图软件会覆盖 `alwaysOnTop` 的层级，需要在 Main Process 侧定时器重新 assert `setAlwaysOnTop(true, 'screen-saver')`。
+
+### 路径提取：Zhang-Suen 骨架化替代 findContours（阶段 7）
+
+阶段 6 使用 `findContours(RETR_LIST, CHAIN_APPROX_NONE)` 从二值图中提取轮廓。它的本质是追踪白色区域的**外边界**——对于宽度 > 1px 的线条，轮廓围绕线条外围走一圈，导致一条粗线产生两条轮廓路径（双线问题）。
+
+阶段 7 替换为：
+1. OpenCV 预处理（GaussianBlur → Otsu 阈值 → Morph Close）
+2. 纯 TypeScript Zhang-Suen 迭代细化（将白色区域缩减到 1px 中心线）
+3. 骨架追踪（从端点沿骨架走，交叉点分叉）
+
+**为什么用纯 TypeScript 而非 OpenCV？** OpenCV 的骨架化功能在 `ximgproc` 模块中，`@dalongrong/opencv-wasm` 精简构建不含此模块。Zhang-Suen 是经典算法，实现简洁，性能可接受（每轮迭代 O(W×H)）。
+
+**分辨率注意事项**：路径提取在原始图片分辨率下进行。大图的 Zhang-Suen 迭代次数多，路径点数密集。叠加层 Canvas 渲染时坐标经过包围盒比例映射，视觉上缩放即可。
+
 ## 已知问题
 
-- **Node.js v24 + `.mjs` 类型注解**：Node.js v24 对 `.mjs` 文件不做 TypeScript 类型剥离，`(data: Buffer)` 等语法导致 `SyntaxError: Unexpected token ':'`。解决：使用 `.ts` 扩展名 + `tsx` 运行（`npx tsx scripts/dev.ts`），纯 JS 的 `.mjs` 仍可直接 `node` 运行（如 `build-main.mjs`、`build-workers.mjs`）。
+- **Node.js v24 + `.mjs` 类型注解**：Node.js v24 对 `.mjs` 文件不做 TypeScript 类型剥离。解决：使用 `.ts` + `tsx` 运行，纯 JS 的 `.mjs` 用 `node` 运行。
+- **`Ctrl+Shift+F9` 当前硬编码**：切换叠加层穿透模式的快捷键在 `preview-overlay.ts` 中写死。阶段 10 需改为从 configStore 读取，并纳入快捷键管理器统一管理。仅在预览状态注册。
+- **路径提取在大图上性能**：Zhang-Suen 骨架化在原始图片分辨率下运行。未来可考虑在路径提取前加入缩放（如 max 1024px）。
+- **`session.defaultSession` 是静态成员**：不能通过 `win.webContents.session.defaultSession` 访问，必须 `import { session } from 'electron'; session.defaultSession`。
+- **Preload 必须 `.cjs` 扩展名**：`"type": "module"` 导致 Electron 将 `.js` 以 ESM 解析，preload 中 `require('electron')` 失败。解决：`build-main.mjs` 将 preload 单独构建为 CJS + `.cjs`。
+- **Worker 非打包模式**：esbuild `bundle: true` 将 CJS 依赖包裹在 `__require()` 中，与 ESM Worker 不兼容。解决：`build-workers.mjs` 改为 `bundle: false`。
+- **Emscripten WASM 在 worker_threads 中不兼容**：`@techstark/opencv-js` 在 Worker 中 `onRuntimeInitialized` 永不触发。解决：替换为 `@dalongrong/opencv-wasm`。
+- **Electron 沙箱须关闭**：`sandbox: true` 导致 `File.path` 为 `undefined`。解决：`sandbox: false`。
 - **`session.defaultSession` 是静态成员**：不能通过 `win.webContents.session.defaultSession`（实例）访问，必须通过 `import { session } from 'electron'; session.defaultSession` 静态访问。
 - **Electron sandbox 下 `File.path` 不可用**：渲染进程沙箱（`sandbox: true`，Electron 20+ 默认开启）中 `<input type="file">` 选择的文件无 `path` 属性。阶段 4 通过 `FileReader.readAsDataURL()` 在渲染进程直接读取文件内容绕过此限制。
 - **CSP 阻止 data: URL 图片**：`default-src 'self'` 不包含 `data:` 协议，通过 IPC 传递的 base64 data URL 被浏览器阻止渲染。解决：显式添加 `img-src 'self' data:`。
@@ -477,11 +550,19 @@ const { cv } = require('@dalongrong/opencv-wasm')
 
 **教训**：Emscripten 编译的 WASM 包在 `worker_threads` 环境下的兼容性与构建配置强相关。优先选择明确标注支持 Node.js 且附带本地 WASM 文件的包。
 
+## ⚠ 阶段 10 待办：`Ctrl+Shift+F9` 可配置化
+
+当前 `Ctrl+Shift+F9` 在 `preview-overlay.ts` 中硬编码为 `TOGGLE_SHORTCUT` 常量。阶段 10（快捷键管理器）需要：
+- 在 `config-store.ts` 的 schema 中新增 `hotkeys.toggleOverlay` 配置项（默认 `'Ctrl+Shift+F9'`）
+- 快捷键管理器监听 `state-change` → PREVIEWING 状态注册该键 → 退出 PREVIEWING 注销
+- `createOverlay` 改为接收快捷键参数（或从 configStore 读取）而非硬编码常量
+- `globalShortcut.register` 改为通过快捷键管理器统一管理
+
 ## 依赖注入架构
 
-已实现。`createAppContext()` 工厂函数在 `src/main/index.ts` 的 `app.whenReady()` 中调用，组装三个核心依赖：
+已实现。`createAppContext()` 工厂函数在 `src/main/index.ts` 的 `app.whenReady()` 中调用，组装核心依赖：
 - `stateMachine` — 全局状态机单例（`StateMachine` 实例）
 - `configStore` — 配置存储单例（`ConfigStore` 实例，cwd 指向 `dirname(process.execPath)`）
 - `mainWindow` — 主 BrowserWindow 引用（初始为 null，窗口创建后赋值）
 
-各模块通过 `IpcHandlerDeps` 等接口接收依赖，禁止模块间直接 import 全局单例。`registerIpcHandlers()` 接收 `{ getState, getMainWindow }` 两个 getter 函数。
+各模块通过 `IpcHandlerDeps` 等接口接收依赖，禁止模块间直接 import 全局单例。`registerIpcHandlers()` 接收 `{ getState, getMainWindow, getContext, runPipeline, enterPreview, exitPreview }` 六个 getter/回调。

@@ -42,3 +42,12 @@ await esbuild.build({
   outfile: 'dist/main/preload/index.cjs',
   external: ['electron'],
 })
+
+// Overlay Preload — 叠加窗口专用 preload
+await esbuild.build({
+  ...shared,
+  entryPoints: ['src/preload/overlay.ts'],
+  format: 'cjs',
+  outfile: 'dist/main/preload/overlay.cjs',
+  external: ['electron'],
+})

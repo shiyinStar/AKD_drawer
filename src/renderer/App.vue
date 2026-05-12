@@ -106,6 +106,11 @@ onMounted(async () => {
   window.electronAPI.onAppStateChange((state) => onAppStateChange(state))
   window.electronAPI.onPipelineProgress((progress) => onPipelineProgress(progress))
   window.electronAPI.onToast((toast) => addToast(toast))
+  window.electronAPI.onOverlayScaleChanged((data) => {
+    if (appStatus.value === 'PREVIEWING') {
+      statusExtra.value = `${data.scale}x`
+    }
+  })
 })
 </script>
 

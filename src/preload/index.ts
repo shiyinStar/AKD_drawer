@@ -74,4 +74,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   openFileDialog: (): Promise<string | null> =>
     ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILE_DIALOG),
+
+  onOverlayScaleChanged: (
+    callback: (data: { scale: number; width: number; height: number }) => void,
+  ): void => {
+    ipcRenderer.on(
+      IPC_CHANNELS.OVERLAY_SCALE_CHANGED,
+      (_event, data: { scale: number; width: number; height: number }) =>
+        callback(data),
+    )
+  },
+
+  enterPreview: (): Promise<unknown> =>
+    ipcRenderer.invoke(IPC_CHANNELS.OVERLAY_ENTER_PREVIEW),
+
+  exitPreview: (): Promise<unknown> =>
+    ipcRenderer.invoke(IPC_CHANNELS.OVERLAY_EXIT_PREVIEW),
 })

@@ -37,6 +37,11 @@ interface ElectronAPI {
   ): void
   getImageData(): Promise<unknown>
   openFileDialog(): Promise<string | null>
+  onOverlayScaleChanged(
+    callback: (data: { scale: number; width: number; height: number }) => void,
+  ): void
+  enterPreview(): Promise<unknown>
+  exitPreview(): Promise<unknown>
 }
 
 declare global {

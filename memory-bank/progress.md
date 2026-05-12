@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-12 (阶段 6 完成)
+**最后更新**: 2026-05-12 (阶段 7 完成)
 
 ---
 
@@ -478,27 +478,123 @@
 | 源码 `require()` 检查 | 0 匹配 |
 | 依赖变更 | `@techstark/opencv-js` → `@dalongrong/opencv-wasm@4.8.1` |
 
-## 下一步：阶段 7 — 预览叠加窗口
+## 阶段 7：预览叠加窗口 ✅ 完成
+
+### 步骤 7.1 — 叠加窗口创建与销毁 ✅
+- `src/main/preview-overlay.ts` 创建：
+  - `createOverlay({ paths, boundingBox, lineColor, opacity }): BrowserWindow`
+  - `destroyOverlay()` / `getOverlayWindow()`
+  - 窗口属性：`transparent: true`、`alwaysOnTop: true`、`frame: false`、`skipTaskbar: true`、`hasShadow: false`
+  - 初始大小 = boundingBox 尺寸（最小 100px），主屏幕居中
+  - dev/prod URL 切换（与主窗口一致）
+  - 每 500ms 定时器强制 `setAlwaysOnTop(true, 'screen-saver')` 防止被其他软件覆盖置顶
+- `src/renderer/overlay/index.html`：叠加层 HTML（Canvas + 缩放标签）
+- `src/renderer/overlay/main.ts`：Canvas 渲染 + 交互逻辑
+- `src/preload/overlay.ts`：叠加层专用 contextBridge preload
+
+### 步骤 7.2 — Canvas 路径渲染 ✅
+- devicePixelRatio 适配、坐标映射、逐路径 lineTo 渲染
+- 线宽 2px、lineCap round、lineJoin round
+- 虚线边框 `[4, 4]`
+- window resize → 重绘 + 更新缩放比例
+
+### 步骤 7.3-7.5 — 交互模型演进 ✅
+
+经历了三次迭代：
+
+**迭代 1**：叠加窗口渲染侧监听 `keydown`/`keyup` 检测 Ctrl 按键
+- 问题：窗口失焦后 keydown/keyup 不再送达，且 `setIgnoreMouseEvents(true)` 导致点击无法重新获取焦点 → 死锁
+
+**迭代 2**：主进程注册全局快捷键 `Ctrl+Shift+F9` 切换交互/穿透模式
+- 快捷键在任何窗口都能触发，解决了焦点问题
+- 但 `Space` 作为键名的快捷键被系统输入法保留，改为 `Ctrl+Shift+F9`
+
+**迭代 3（最终方案）**：进入预览默认交互模式 + 全局快捷键作为备用
+- 默认：进入预览即进入交互模式（缩放手柄可见，可直接拖拽/缩放）
+- `Ctrl+Shift+F9`：切换交互/穿透模式（需要操作目标软件时切穿透，之后恢复交互）
+- 穿透模式：`setIgnoreMouseEvents(true)`，鼠标落到下层软件
+- 交互模式：`setIgnoreMouseEvents(false)`，可拖拽移动 + 四角等比缩放 0.5x~3.0x
+
+### 步骤 7.6 — 缩放比例同步到状态栏 ✅
+- 叠加层 `sendScaleChanged` → Main `ipcMain.on` 转发 → Renderer `OVERLAY_SCALE_CHANGED`
+- PREVIEWING 状态下状态栏显示当前缩放比例 "1.5x"
+
+### 步骤 7.7 — 多显示器适配 ✅
+- 初始位置：`screen.getPrimaryDisplay().workAreaSize` 居中
+- `setBounds()` 支持跨屏拖拽 + 缩放
+
+### 路径提取算法重大迭代（阶段 7 期间）
+
+经过两次算法迭代：
+
+**迭代 1**：`findContours(RETR_LIST, CHAIN_APPROX_NONE)` + `approxPolyDP`
+- 问题 1：固定阈值 128 丢失细/淡线条
+- 问题 2：epsilon=1.0 过度简化，细线条被丢弃
+- 问题 3：`findContours` 追踪白色区域**外边界**，粗线变双线轮廓
+
+**迭代 2（最终方案）**：Zhang-Suen 骨架化 + 骨架追踪
+- 替换 `findContours` → 纯 TypeScript Zhang-Suen 细化算法，将线条缩减到 1px 宽中心线
+- 骨架追踪：从端点出发沿骨架走，交叉点分叉，生成单线路径
+- 预处理：GaussianBlur(3,3) → THRESH_OTSU 自适应阈值 → MORPH_CLOSE(2,2) 闭合断线
+
+### 性能说明
+- 路径提取在**原始图片分辨率**下进行（推理 512×512 输出 resize 回原始尺寸）
+- 大图（如 4K）的 Zhang-Suen 迭代次数多，路径点密集，可在叠加层放大时看到像素级锯齿
+- 绘制时坐标通过叠加窗口/包围盒比例映射，不需要原始分辨率下的每个像素
+
+### 新增/修改文件清单
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/main/preview-overlay.ts` | 新增 | 叠加窗口生命周期 + 全局快捷键 + 置顶定时器 |
+| `src/renderer/overlay/index.html` | 新增 | 叠加层 HTML 入口 |
+| `src/renderer/overlay/main.ts` | 新增 | Canvas 渲染 + 交互模式切换（拖拽/缩放） |
+| `src/preload/overlay.ts` | 新增 | 叠加层 contextBridge preload（`onInit`/`onSetInteractive`/`setBounds`/`sendScaleChanged`） |
+| `src/workers/path-extraction/worker.ts` | 重写 | findContours → Zhang-Suen 骨架化 + 骨架追踪 |
+| `src/main/index.ts` | 修改 | 导入 preview-overlay；enterPreview/exitPreview；状态机 PREVIEWING 监听 |
+| `src/main/ipc-handlers.ts` | 修改 | 新增预览进入/退出 handler、叠加层 bounds/缩放转发 handler |
+| `src/shared/types.ts` | 修改 | IPC_CHANNELS 新增 `OVERLAY_ENTER_PREVIEW`/`OVERLAY_EXIT_PREVIEW` |
+| `src/preload/index.ts` | 修改 | 新增 `onOverlayScaleChanged`/`enterPreview`/`exitPreview` |
+| `src/renderer/env.d.ts` | 修改 | `ElectronAPI` 新增 3 个方法签名 |
+| `src/renderer/App.vue` | 修改 | `onMounted` 新增缩放监听 |
+| `scripts/build-main.mjs` | 修改 | 新增 overlay preload CJS 构建 |
+| `vite.config.ts` | 修改 | 多页面构建（main + overlay 入口） |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功（含 overlay.cjs） |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功（main + overlay 双入口） |
+
+---
+
+## 下一步：阶段 8 — 绘制引擎
 
 ---
 
 ## 给后续开发者的备注
 
 1. **preload 是关键桥接层**：新增 IPC 监听器需同步修改 3 个文件（preload/index.ts → env.d.ts → 消费组件）
-2. **Electron 沙箱**：`sandbox: false` 已关闭，`file.path` 现可用于 `<input type="file">` 和拖拽
+2. **Electron 沙箱**：`sandbox: false` 已关闭
 3. **preload 构建**：必须输出 `.cjs` 扩展名，否则 `"type": "module"` 导致 Electron 以 ESM 解析失败
-4. **Worker 构建**：`bundle: false` 避免 CJS 依赖被包裹在 `__require()` 中，与 ESM Worker 不兼容
-5. **Main Process 改动需重启**：`scripts/dev.ts` 已自动构建 Main+Workers，但需手动重启 Electron
-6. **KeepAlive** 已在 `ContentRouter` 中使用，新增需要保持状态的组件无需额外处理
-7. 所有源码 `require()` 调用仅限 `dist/` 构建产物，`src/` 下零 CommonJS
-8. **路径提取 Worker** 使用 `@dalongrong/opencv-wasm`（非 `@techstark/opencv-js`），通过 `createRequire` 以 CJS 模式同步加载，本地 `.wasm` 文件无需 CDN
-9. **OpenCV Mat 内存管理**：每个 `cv.Mat` 使用完毕后必须调用 `.delete()`，Worker 退出前确保清理
-10. **Worker 中 CJS 包加载**：若 OpenCV 包为 CJS（无 ESM 入口），在 Worker 中使用 `createRequire(import.meta.url)` 创建本地 `require` 函数加载，无需修改构建配置
-11. **集成测试图片选择**：`tests/integration/pipeline-e2e.test.ts` 支持 `TEST_IMAGE_PATH` 环境变量指定自定义测试图片，不设则交互式选择合成图
+4. **Worker 构建**：`bundle: false` 避免 CJS 依赖被包裹在 `__require()` 中
+5. **Main Process 改动需重启**：`scripts/dev.ts` 已自动构建 Main+Workers
+6. **KeepAlive** 已在 `ContentRouter` 中使用
+7. **路径提取 Worker** 使用 `@dalongrong/opencv-wasm`，通过 `createRequire` CJS 桥接
+8. **OpenCV Mat 内存管理**：每个 `cv.Mat` 使用完毕后必须调用 `.delete()`
+9. **路径提取算法**：Zhang-Suen 骨架化（纯 TS）→ 骨架追踪，生成单线中心线路径
+10. **叠加层有独立 preload**：`src/preload/overlay.ts` → `dist/main/preload/overlay.cjs`
+11. **叠加层交互**：默认进入即交互模式（可拖拽/缩放），`Ctrl+Shift+F9` 切换穿透模式
+12. **叠加层置顶**：500ms 定时器强制 `setAlwaysOnTop(true, 'screen-saver')`，防止被其他软件覆盖
+13. **⚠ 阶段 10 提醒**：`Ctrl+Shift+F9`（切换穿透）需要在阶段 10 快捷键管理器中实现为可配置项，与其他快捷键（F5/F6/F7）同等对待
+14. **路径提取分辨率**：在原始图片尺寸下进行，大图需注意性能；叠加层 Canvas 坐标映射会缩放，不依赖原始分辨率
 
 ### 阶段 6 关键 Bug：OpenCV 包不兼容
 
 | 问题 | 原因 | 修复 |
 |------|------|------|
-| `@techstark/opencv-js` 在 Worker 中永久超时 | (1) `parentPort.on('message')` 在 `await import()` 之后注册，消息竞态；(2) Emscripten WASM 在 `worker_threads` 中 `onRuntimeInitialized` 永不触发；(3) CJS 模式 `require()` 返回 Module 但 WASM 未初始化 | 修复竞态后仍超时 → 替换为 `@dalongrong/opencv-wasm@4.8.1`：本地 WASM 文件 + `createRequire` 同步加载（~75ms → 单次提取 ~192ms） |
-| `cv.imdecode` 不可用 | `@dalongrong/opencv-wasm` 不包含 `imgcodecs` 模块 | 改用 `sharp` 解码 PNG 为 raw 灰度像素 → `cv.matFromArray()` 构建 Mat |
+| `@techstark/opencv-js` 在 Worker 中永久超时 | Emscripten WASM 在 `worker_threads` 中 `onRuntimeInitialized` 永不触发 | 替换为 `@dalongrong/opencv-wasm@4.8.1` |
+| `cv.imdecode` 不可用 | opencv-wasm 不含 `imgcodecs` 模块 | `sharp` 解码 PNG → `cv.matFromArray()` |

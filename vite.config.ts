@@ -9,5 +9,11 @@ export default defineConfig({
     target: 'esnext',
     modulePreload: false,
     outDir: '../../dist/renderer',
+    rollupOptions: {
+      input: {
+        main: 'src/renderer/index.html',
+        overlay: 'src/renderer/overlay/index.html',
+      },
+    },
   },
 })
