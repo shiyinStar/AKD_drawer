@@ -4,6 +4,7 @@ import { stateMachine } from './state-machine.js'
 import { ConfigStore } from './config-store.js'
 import type { StateMachine } from './state-machine.js'
 import type { ConfigStore as ConfigStoreType } from './config-store.js'
+import type { DrawPath, BoundingBox } from '../shared/types.js'
 
 export interface AppContext {
   stateMachine: StateMachine
@@ -15,6 +16,8 @@ export interface AppContext {
   height: number
   lineArtBuffer: Buffer | null
   lineArtBase64: string | null
+  paths: DrawPath[] | null
+  boundingBox: BoundingBox | null
 }
 
 export function createAppContext(): AppContext {
@@ -32,5 +35,7 @@ export function createAppContext(): AppContext {
     height: 0,
     lineArtBuffer: null,
     lineArtBase64: null,
+    paths: null,
+    boundingBox: null,
   }
 }

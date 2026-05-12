@@ -344,28 +344,39 @@ ONNX Runtime 推理 Worker — 阶段 5 实现：
 - 后处理：输出张量反归一化 → Uint8Array `[0, 255]` → `sharp` 缩放回原始尺寸（从 metadata 自动检测）→ PNG Buffer
 - 30s 超时保护 + 错误消息回传
 
-### src/workers/path-extraction/worker.ts (占位)
-OpenCV.js 路径提取 Worker。后续将: 二值化 + findContours + approxPolyDP + 排序。
+### src/workers/path-extraction/worker.ts
+OpenCV.js 路径提取 Worker — 阶段 6 实现：
+- **OpenCV 依赖**：使用 `@dalongrong/opencv-wasm`（v4.8.1，CJS 包），通过 `createRequire(import.meta.url)` 同步加载（~75ms），本地 `.wasm` 文件无需 CDN
+- **PNG 解码**：`sharp` 解码 PNG Buffer → raw 灰度像素 → `cv.matFromArray()` 构建 Mat（因该 OpenCV 构建不含 `imgcodecs` 模块，无 `cv.imdecode`）
+- **处理流程**：`cv.threshold(binary, 128, THRESH_BINARY)` 二值化 → `cv.bitwise_not(inverted)` 反转 → `cv.findContours(inverted, contours, hierarchy, RETR_LIST, CHAIN_APPROX_NONE)` 像素级轮廓 → `cv.approxPolyDP(contour, approx, 1.0, false)` 简化
+- 过滤 < 3 点的极小轮廓，提取 `{x, y}[]` 坐标序列
+- 按首点 Y 升序（Y 相同 X 升序）排序路径
+- 无有效轮廓 → `{ type: 'error', message: '未检测到可绘制线条' }`
+- 所有 `cv.Mat` 使用完毕调用 `.delete()` 释放 WASM 内存
+
+### src/shared/geometry-utils.ts
+几何工具函数 — 阶段 6 新增：
+- `computeBoundingBox(paths: DrawPath[]): BoundingBox` — 计算所有路径点的全局最小外接矩形
+- 空数组 → 返回零值包围盒 `{ minX:0, minY:0, width:0, height:0 }`
+- 由 `pipeline-orchestrator.ts` 在路径提取完成后调用，结果存入 `AppContext.boundingBox`
 
 ### src/main/worker-manager.ts
-Worker 生命周期管理器 — 阶段 5 新增：
-- `runInference(modelPath, imageBuffer): Promise<Buffer>` 单次推理接口
-- 创建 Worker（`new URL('../../workers/inference/worker.js', import.meta.url)` + `workerData: { modelPath }`）
-- 等待 `{ type: 'result', lineArtBuffer }` 或 `{ type: 'error', message }` → terminate Worker
-- 30s 超时自动 `worker.terminate()` + reject
-- error / messageerror 事件兜底清理
+Worker 生命周期管理器 — 阶段 5~6：
+- `runInference(modelPath, imageBuffer): Promise<Buffer>` — 推理 Worker 封装（30s 超时）
+- `runPathExtraction(lineArtBuffer): Promise<{ paths: DrawPath[] }>` — 路径提取 Worker 封装（60s 超时）— 阶段 6 新增
+- 两方法均遵循：创建 Worker（`new URL('../../workers/.../worker.js', import.meta.url)`）→ `postMessage`（Buffer 通过 Transferable 零拷贝传递）→ 等待结果 → `terminate`
+- 超时自动 `worker.terminate()` + reject，error / messageerror 事件兜底
 
 ### src/main/pipeline-orchestrator.ts
-管线编排器 — 阶段 5 新增：
+管线编排器 — 阶段 5~6：
 - `createPipelineOrchestrator({ modelPath, getContext, getMainWindow, stateMachine })` 工厂函数
-- `run(imageBuffer)` 编排完整推理流程：
-  1. 推送 `pipeline-progress`（stage: 'inference', progress: 0）
-  2. 调用 `runInference()` 执行推理
-  3. 存储 `lineArtBuffer` / `lineArtBase64` 到 AppContext
-  4. 推送 `pipeline-progress`（progress: 100）+ `pipeline-complete`（lineArtBase64, pathCount: 0, boundingBox: null）
-  5. 状态机转 `IDLE` → 推送 `APP_STATE` + 成功 Toast
-- 推理失败 → 状态机转 `ERROR` → 推送 `APP_ERROR` + `APP_STATE` + 错误 Toast
-- 通过 `IpcHandlerDeps.runPipeline` 注入到 IPC 层，在 `IMPORT_IMAGE` 成功后自动触发
+- `run(imageBuffer)` 编排完整二阶段管线：
+  1. **推理阶段**：推送 `pipeline-progress(inference, 0)` → `runInference()` → 存储 `lineArtBuffer`/`lineArtBase64` → 推送 `pipeline-progress(inference, 100)`
+  2. **路径提取阶段**（阶段 6 新增）：推送 `pipeline-progress(extraction, 50)` → `runPathExtraction()` → `computeBoundingBox()` → 存储 `paths`/`boundingBox` → 推送 `pipeline-progress(extraction, 100)`
+  3. 推送 `pipeline-complete`（含实际 `pathCount` + `boundingBox`）
+  4. 状态机转 `IDLE` → 推送 `APP_STATE` + 成功 Toast（显示路径数量）
+- 推理或路径提取失败 → 状态机转 `ERROR` → 推送 `APP_ERROR`（路径提取错误含针对性建议）
+- 在 `IMPORT_IMAGE` 成功后通过 `IpcHandlerDeps.runPipeline` 回调自动触发
 
 ## 已知问题
 
@@ -374,8 +385,9 @@ Worker 生命周期管理器 — 阶段 5 新增：
 - **Electron sandbox 下 `File.path` 不可用**：渲染进程沙箱（`sandbox: true`，Electron 20+ 默认开启）中 `<input type="file">` 选择的文件无 `path` 属性。阶段 4 通过 `FileReader.readAsDataURL()` 在渲染进程直接读取文件内容绕过此限制。
 - **CSP 阻止 data: URL 图片**：`default-src 'self'` 不包含 `data:` 协议，通过 IPC 传递的 base64 data URL 被浏览器阻止渲染。解决：显式添加 `img-src 'self' data:`。
 - **Preload 必须 `.cjs` 扩展名**：`package.json` 的 `"type": "module"` 导致 Electron 将 `.js` 文件以 ESM 解析，preload 中 `require('electron')` 抛出 `SyntaxError: Cannot use import statement outside a module`。解决：`build-main.mjs` 将 preload 单独构建为 CJS 格式 + `.cjs` 扩展名，绕过 type 声明。
-- **Worker 非打包模式**：esbuild `bundle: true` 将 CJS 依赖（sharp、onnxruntime-node）包裹在 `__require()` 中，`require` 在 ESM Worker 中不可用。解决：`build-workers.mjs` 改为 `bundle: false`，保留原生 `import` 语句由 Node.js 解析。
-- **Electron 沙箱须关闭**：默认 `sandbox: true` 导致 `<input type="file">` 的 `File.path` 始终为 `undefined`，图片数据只能通过 FileReader 在渲染进程读取。解决：`webPreferences` 设置 `sandbox: false`，恢复 `file.path` 可用。
+- **Worker 非打包模式**：esbuild `bundle: true` 将 CJS 依赖包裹在 `__require()` 中，`require` 在 ESM Worker 中不可用。解决：`build-workers.mjs` 改为 `bundle: false`，保留原生 `import` 语句由 Node.js 解析。
+- **Emscripten WASM 在 worker_threads 中不兼容**：`@techstark/opencv-js`（Emscripten 构建，CDN 加载 WASM）在 `worker_threads` 中 `onRuntimeInitialized` 永不触发，导步 `await import()` + `onRuntimeInitialized` 回调模式均永久挂起。解决：替换为 `@dalongrong/opencv-wasm`（本地 `.wasm` 文件 + 同步 `require()` 加载），并在 Worker 内使用 `createRequire(import.meta.url)` 桥接 CJS 包。
+- **Electron 沙箱须关闭**：默认 `sandbox: true` 导致 `<input type="file">` 的 `File.path` 始终为 `undefined`。解决：`webPreferences` 设置 `sandbox: false`。
 
 ## 模块系统约束
 
@@ -388,7 +400,8 @@ Worker 生命周期管理器 — 阶段 5 新增：
 ├── 相对导入 (Renderer) → 可省略后缀 (Vite bundler 自动解析)
 ├── __dirname/__filename → import.meta.url + fileURLToPath
 ├── Worker 创建 → new Worker(new URL('...', import.meta.url))
-├── CJS 依赖 (仅 nut-js) → src/main/adapters/ 下 createRequire 桥接
+├── CJS 依赖 (Main Process) → src/main/adapters/ 下 createRequire 桥接 (如 nut-js)
+├── CJS 依赖 (Worker) → Worker 文件内直接 createRequire(import.meta.url) (如 opencv-wasm)
 ├── Preload 构建 → 必须 .cjs 扩展名（CJS 格式），不可用 ESM
 └── Worker 构建 → bundle: false，保留 import 语句由 Node.js 原生 CJS→ESM 互操作
 ```
@@ -426,6 +439,43 @@ AKD 支持两种图片导入方式，分别对应不同的数据流：
 | Preload | CJS | `.cjs` | 绕过 `"type": "module"`，Electron preload 需要 CJS |
 | Workers | ESM | `.js` | `worker_threads` 加载，Node.js 原生 CJS→ESM 互操作 |
 | Renderer | ESM | `.js` | Vite 打包，浏览器 ESM |
+
+### ESM Worker 中加载 CJS 包（OpenCV 桥接模式）
+
+路径提取 Worker 需要 OpenCV，但 Node.js 兼容的 OpenCV 包（`@dalongrong/opencv-wasm`）仅提供 CJS 入口。Worker 本身是 ESM 文件，无法直接 `import` CJS 包。
+
+**解决模式**——在 Worker 内部使用 `createRequire` 创建隔离的 CJS 加载器：
+
+```typescript
+import { createRequire } from 'node:module'
+
+// 基于当前 Worker 文件的 URL 创建 require 函数
+// 使得 CJS 包中的 __dirname 和相对路径正确解析
+const require = createRequire(import.meta.url)
+
+// 同步加载 CJS 包（~75ms），直接获取 cv 对象
+const { cv } = require('@dalongrong/opencv-wasm')
+```
+
+**关键要点**：
+- `createRequire(import.meta.url)` 创建的 `require` 函数具有完整 CJS 环境（`__dirname`、`require.resolve` 等），CJS 包内部的文件系统访问正常运作
+- 此模式适用于所有仅提供 CJS 入口的依赖，比 `import()` 异步加载更可靠（后者在 CJS 包的 WASM 初始化存在竞态）
+- 与 Main Process 的 `src/main/adapters/` 桥接层不同，Worker 中直接在文件内使用 `createRequire`，无需单独 Adapter 文件
+- esbuild 配置 `bundle: false` + `format: 'esm'` 保留原生 `import` 语句，`createRequire` 在运行时由 Node.js 解析，构建无需额外处理
+
+### OpenCV 包选择：`@techstark/opencv-js` vs `@dalongrong/opencv-wasm`
+
+| 维度 | `@techstark/opencv-js` | `@dalongrong/opencv-wasm` |
+|------|------------------------|---------------------------|
+| OpenCV 版本 | 4.12.0 | 4.8.1 |
+| WASM 来源 | CDN 动态加载 | 本地 `.wasm` 文件 |
+| 加载方式 | 异步 `import()` + 等待 `onRuntimeInitialized` | 同步 `require()`，立即可用 |
+| `worker_threads` 兼容 | ❌ `onRuntimeInitialized` 永不触发 | ✅ 同步加载，稳定运行 |
+| 模块包含 | 全功能（含 `imgcodecs`） | 精简（无 `imgcodecs`，需 `sharp` 辅助解码） |
+| 加载耗时 | N/A（不可用） | ~75ms |
+| 选择 | 初始选择，因 Worker 不兼容放弃 | 最终方案 |
+
+**教训**：Emscripten 编译的 WASM 包在 `worker_threads` 环境下的兼容性与构建配置强相关。优先选择明确标注支持 Node.js 且附带本地 WASM 文件的包。
 
 ## 依赖注入架构
 

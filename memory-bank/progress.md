@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-11 (阶段 5 完成)
+**最后更新**: 2026-05-12 (阶段 6 完成)
 
 ---
 
@@ -412,7 +412,73 @@
 | `scripts/build-workers.mjs` | `bundle: false`（非打包模式，保留原生 import） |
 | `scripts/dev.ts` | 启动前自动构建 Workers |
 
-## 下一步：阶段 6 — 路径提取
+## 阶段 6：路径提取 ✅ 完成
+
+### 步骤 6.1 — 路径提取 Worker ✅
+- `src/workers/path-extraction/worker.ts` 完整实现：
+  - **OpenCV 依赖**：使用 `@dalongrong/opencv-wasm`（v4.8.1），通过 `createRequire` 以 CJS 模式同步加载（~75ms），本地 `.wasm` 文件无需 CDN
+  - **PNG 解码**：使用 `sharp` 将 PNG Buffer 解码为 raw 灰度像素 → `cv.matFromArray()` 构建 Mat（因 `@dalongrong/opencv-wasm` 不含 `cv.imdecode`）
+  - 消息协议：接收 `{ type: 'extract', lineArtBuffer }` → 发送 `{ type: 'result', paths }` 或 `{ type: 'error', message }`
+  - 五步处理流程：
+    1. `sharp` 解码 PNG → raw 灰度 Uint8Array → `cv.matFromArray(height, width, CV_8UC1, Array.from(grayData))`
+    2. `cv.threshold(gray, binary, 128, 255, cv.THRESH_BINARY)` 二值化
+    3. `cv.bitwise_not(binary, inverted)` 反转 — 线条变白色前景
+    4. `cv.findContours(inverted, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_NONE)` 像素级轮廓提取
+    5. 遍历每条轮廓：过滤 < 3 点 → `cv.approxPolyDP(contour, approx, 1.0, false)` 简化 → 提取 `{x, y}[]`
+  - 绘制顺序优化：按首点 Y 升序，Y 相同时 X 升序
+  - 无有效轮廓 → 发送 error："未检测到可绘制线条"
+  - 所有 Mat 使用完毕调用 `.delete()` 释放内存
+
+### 步骤 6.2 — Worker 管理器扩展 ✅
+- `src/main/worker-manager.ts` 新增：
+  - `runPathExtraction(lineArtBuffer: Buffer): Promise<{ paths: DrawPath[] }>` 方法
+  - 路径提取 Worker 创建使用 `new URL('../../workers/path-extraction/worker.js', import.meta.url)`
+  - 超时 60s（大图轮廓可能很多）
+  - 完成后 terminate Worker
+  - error / messageerror 事件兜底清理
+
+### 步骤 6.3 — 全局路径包围盒计算 ✅
+- `src/shared/geometry-utils.ts` 创建：
+  - `computeBoundingBox(paths: DrawPath[]): BoundingBox` 函数
+  - 遍历所有路径的所有点，找出 minX、minY、maxX、maxY
+  - 返回 `{ minX, minY, width: maxX-minX, height: maxY-minY }`
+  - 空数组 → 返回 `{ minX: 0, minY: 0, width: 0, height: 0 }`
+- 类型 `DrawPath` 和 `BoundingBox` 从 `types.ts` 导入
+
+### 步骤 6.4 — 管线编排器集成路径提取 ✅
+- `src/main/pipeline-orchestrator.ts` 更新：
+  - 推理完成后自动启动路径提取（`runPathExtraction`）
+  - 调用 `computeBoundingBox(paths)` 计算包围盒
+  - 存储 `paths` 和 `boundingBox` 到 AppContext
+  - `pipeline-complete` 发送实际 `pathCount` 和 `boundingBox`
+  - 路径提取失败 → 状态机转 ERROR → 推送 `app-error`（含针对性建议）
+  - 无有效线条 → ERROR（reason: "未检测到可绘制线条"）
+  - 成功 Toast 显示路径数量："线稿提取完成，共 N 条路径"
+- `src/main/app-context.ts` 扩展：新增 `paths: DrawPath[] | null`、`boundingBox: BoundingBox | null`
+
+### 新增测试文件
+| 文件 | 用例 | 说明 |
+|------|------|------|
+| `tests/unit/geometry-utils.test.ts` | 3 | 有路径包围盒、空数组零值、多路径最小外接矩形 |
+| `tests/unit/path-extraction-worker.test.ts` | 7 | 方形边框至少1轮廓、全白报错、全黑报错、≥3点、排序、坐标范围 |
+| `tests/integration/pipeline-e2e.test.ts` | 5 | 完整推理+提取流程、路径点数、坐标范围、超时、无有效线条 |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1538 模块 |
+| `npx tsx --test tests/unit/geometry-utils.test.ts` | 3/3 通过 |
+| `npx tsx --test tests/unit/path-extraction-worker.test.ts` | 7/7 通过（192ms/用例） |
+| `npx tsx --test tests/integration/pipeline-e2e.test.ts` | 5/5 通过（madoka.jpg 实测） |
+| 源码 `require()` 检查 | 0 匹配 |
+| 依赖变更 | `@techstark/opencv-js` → `@dalongrong/opencv-wasm@4.8.1` |
+
+## 下一步：阶段 7 — 预览叠加窗口
 
 ---
 
@@ -425,3 +491,14 @@
 5. **Main Process 改动需重启**：`scripts/dev.ts` 已自动构建 Main+Workers，但需手动重启 Electron
 6. **KeepAlive** 已在 `ContentRouter` 中使用，新增需要保持状态的组件无需额外处理
 7. 所有源码 `require()` 调用仅限 `dist/` 构建产物，`src/` 下零 CommonJS
+8. **路径提取 Worker** 使用 `@dalongrong/opencv-wasm`（非 `@techstark/opencv-js`），通过 `createRequire` 以 CJS 模式同步加载，本地 `.wasm` 文件无需 CDN
+9. **OpenCV Mat 内存管理**：每个 `cv.Mat` 使用完毕后必须调用 `.delete()`，Worker 退出前确保清理
+10. **Worker 中 CJS 包加载**：若 OpenCV 包为 CJS（无 ESM 入口），在 Worker 中使用 `createRequire(import.meta.url)` 创建本地 `require` 函数加载，无需修改构建配置
+11. **集成测试图片选择**：`tests/integration/pipeline-e2e.test.ts` 支持 `TEST_IMAGE_PATH` 环境变量指定自定义测试图片，不设则交互式选择合成图
+
+### 阶段 6 关键 Bug：OpenCV 包不兼容
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| `@techstark/opencv-js` 在 Worker 中永久超时 | (1) `parentPort.on('message')` 在 `await import()` 之后注册，消息竞态；(2) Emscripten WASM 在 `worker_threads` 中 `onRuntimeInitialized` 永不触发；(3) CJS 模式 `require()` 返回 Module 但 WASM 未初始化 | 修复竞态后仍超时 → 替换为 `@dalongrong/opencv-wasm@4.8.1`：本地 WASM 文件 + `createRequire` 同步加载（~75ms → 单次提取 ~192ms） |
+| `cv.imdecode` 不可用 | `@dalongrong/opencv-wasm` 不包含 `imgcodecs` 模块 | 改用 `sharp` 解码 PNG 为 raw 灰度像素 → `cv.matFromArray()` 构建 Mat |

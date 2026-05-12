@@ -10,10 +10,10 @@
     "start": "electron dist/main/main/index.js"
   },
   "dependencies": {
+    "@dalongrong/opencv-wasm": "^4.8.1-1",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@nut-tree-fork/nut-js": "^4.2.6",
-    "@techstark/opencv-js": "^4.12.0-release.1",
     "electron": "^42.0.1",
     "electron-store": "^11.0.2",
     "lucide-vue-next": "^0.400.0",
@@ -32,7 +32,10 @@
       "resources/**/*"
     ],
     "extraResources": [
-      { "from": "resources/models", "to": "models" }
+      {
+        "from": "resources/models",
+        "to": "models"
+      }
     ],
     "asar": true,
     "asarUnpack": [

@@ -4,7 +4,8 @@ import type { StateMachine } from './state-machine.js'
 import { StatusState } from '../shared/types.js'
 import { IPC_CHANNELS } from '../shared/types.js'
 import type { PipelineProgress, ErrorInfo } from '../shared/types.js'
-import { runInference } from './worker-manager.js'
+import { runInference, runPathExtraction } from './worker-manager.js'
+import { computeBoundingBox } from '../shared/geometry-utils.js'
 
 export interface PipelineDeps {
   modelPath: string
@@ -36,10 +37,26 @@ export function createPipelineOrchestrator(deps: PipelineDeps) {
         progress: 100,
       } as PipelineProgress)
 
+      win?.webContents.send(IPC_CHANNELS.PIPELINE_PROGRESS, {
+        stage: 'extraction',
+        progress: 50,
+      } as PipelineProgress)
+
+      const { paths } = await runPathExtraction(lineArtBuffer)
+      const boundingBox = computeBoundingBox(paths)
+
+      ctx.paths = paths
+      ctx.boundingBox = boundingBox
+
+      win?.webContents.send(IPC_CHANNELS.PIPELINE_PROGRESS, {
+        stage: 'extraction',
+        progress: 100,
+      } as PipelineProgress)
+
       win?.webContents.send(IPC_CHANNELS.PIPELINE_COMPLETE, {
         lineArtBase64: ctx.lineArtBase64,
-        pathCount: 0,
-        boundingBox: null,
+        pathCount: paths.length,
+        boundingBox,
       })
 
       stateMachine.transition(StatusState.IDLE)
@@ -47,13 +64,19 @@ export function createPipelineOrchestrator(deps: PipelineDeps) {
       win?.webContents.send(IPC_CHANNELS.APP_STATE, StatusState.IDLE)
       win?.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
         type: 'success',
-        message: '线稿提取完成',
+        message: `线稿提取完成，共 ${paths.length} 条路径`,
       })
     } catch (err) {
-      const message = err instanceof Error ? err.message : '推理失败'
+      const message = err instanceof Error ? err.message : '管线失败'
+      const isExtractionError =
+        message.includes('路径提取') ||
+        message.includes('未检测到可绘制线条')
+
       const errorInfo: ErrorInfo = {
         reason: message,
-        suggestion: '请确保模型文件完整，或重新启动应用后重试',
+        suggestion: isExtractionError
+          ? '建议更换线条更清晰的图片重试'
+          : '请确保模型文件完整，或重新启动应用后重试',
         logPath: '',
       }
 
@@ -63,7 +86,7 @@ export function createPipelineOrchestrator(deps: PipelineDeps) {
       win?.webContents.send(IPC_CHANNELS.APP_STATE, StatusState.ERROR)
       win?.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
         type: 'error',
-        message: `推理失败: ${message}`,
+        message: `管线失败: ${message}`,
       })
     }
   }
