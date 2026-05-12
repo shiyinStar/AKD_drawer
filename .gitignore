@@ -7,3 +7,5 @@ config.json
 .history/
 resources/
 release/
+.claude/
+Claude.md
