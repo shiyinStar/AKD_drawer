@@ -38,8 +38,8 @@ test('clampSpeed: 2000 → 保持不变（边界）', () => {
 
 test('toScreen: 基本坐标转换 — 缩放 1x，无偏移', () => {
   const point = { x: 50, y: 30 }
-  const boundingBox: BoundingBox = { minX: 0, minY: 0, width: 100, height: 100 }
-  const overlayRect: OverlayRect = { x: 100, y: 200, width: 100, height: 100 }
+  const boundingBox: BoundingBox = { minX: 0, minY: 0, width: 100, height: 100, scaleFactor: 1 }
+  const overlayRect: OverlayRect = { x: 100, y: 200, width: 100, height: 100, scaleFactor: 1 }
   const scale = 1
 
   const result = toScreen(point, boundingBox, overlayRect, scale)
@@ -50,7 +50,7 @@ test('toScreen: 基本坐标转换 — 缩放 1x，无偏移', () => {
 test('toScreen: 缩放 2x，带 boundingBox 偏移', () => {
   const point = { x: 60, y: 40 }
   const boundingBox: BoundingBox = { minX: 10, minY: 10, width: 80, height: 60 }
-  const overlayRect: OverlayRect = { x: 0, y: 0, width: 160, height: 120 }
+  const overlayRect: OverlayRect = { x: 0, y: 0, width: 160, height: 120, scaleFactor: 1 }
   const scale = 2
 
   const result = toScreen(point, boundingBox, overlayRect, scale)
@@ -62,8 +62,8 @@ test('toScreen: 缩放 2x，带 boundingBox 偏移', () => {
 
 test('toScreen: 缩放 1.5x，坐标四舍五入', () => {
   const point = { x: 15, y: 25 }
-  const boundingBox: BoundingBox = { minX: 0, minY: 0, width: 100, height: 100 }
-  const overlayRect: OverlayRect = { x: 50, y: 80, width: 150, height: 150 }
+  const boundingBox: BoundingBox = { minX: 0, minY: 0, width: 100, height: 100, scaleFactor: 1 }
+  const overlayRect: OverlayRect = { x: 50, y: 80, width: 150, height: 150, scaleFactor: 1 }
   const scale = 1.5
 
   const result = toScreen(point, boundingBox, overlayRect, scale)
@@ -74,7 +74,7 @@ test('toScreen: 缩放 1.5x，坐标四舍五入', () => {
 test('toScreen: 原点坐标 (0,0)', () => {
   const point = { x: 0, y: 0 }
   const boundingBox: BoundingBox = { minX: 0, minY: 0, width: 200, height: 200 }
-  const overlayRect: OverlayRect = { x: 10, y: 20, width: 400, height: 400 }
+  const overlayRect: OverlayRect = { x: 10, y: 20, width: 400, height: 400, scaleFactor: 1 }
   const scale = 2
 
   const result = toScreen(point, boundingBox, overlayRect, scale)
@@ -106,7 +106,7 @@ test('start: 非 PREVIEWING 状态抛出', async () => {
       engine.start(
         [],
         { minX: 0, minY: 0, width: 0, height: 0 },
-        { x: 0, y: 0, width: 100, height: 100 },
+        { x: 0, y: 0, width: 100, height: 100, scaleFactor: 1 },
       ),
     /仅预览状态可启动绘制/,
   )
@@ -134,7 +134,7 @@ test('start: 叠加窗口尺寸无效抛出', async () => {
       engine.start(
         [],
         { minX: 0, minY: 0, width: 0, height: 0 },
-        { x: 0, y: 0, width: 0, height: 100 },
+        { x: 0, y: 0, width: 0, height: 100, scaleFactor: 1 },
       ),
     /叠加窗口尺寸无效/,
   )

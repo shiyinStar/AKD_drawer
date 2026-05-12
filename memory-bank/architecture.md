@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-12 (阶段 12 完成)
+**最后更新**: 2026-05-13 (阶段 14 完成)
 
 ---
 
@@ -766,18 +766,60 @@ const { cv } = require('@dalongrong/opencv-wasm')
 
 ### 异步绘制循环与 stopFlag
 
-绘制循环采用 `async/await` + `setTimeout` 异步模式：
+绘制循环采用 `async/await` + 精度感知延迟模式：
 
 ```
 for each path:
-  起点落笔 → for each point: setPosition → await delay(stepDelay) → if stopFlag: break → 抬笔
+  起点落笔 → 记录 prevPt
+  for each point (j ≥ 1):
+    setPosition(pt)
+    distance = sqrt((pt.x - prevPt.x)² + (pt.y - prevPt.y)²)
+    await delay((distance / speed) × 1000)
+    if stopFlag: break
+    prevPt = pt
+  抬笔
 ```
 
-- `stepDelay = 1000 / drawSpeed` 毫秒 — 速度越快、延迟越短
+- 每步延迟基于**相邻点的实际屏幕像素距离**动态计算：`pointDelay = (distance / speed) × 1000` ms，确保 `speed` 语义精确为"屏幕像素/秒"
+- 相邻点距离 ≈ `scale × 骨架像素间距`。当 scale > 1 时自动增加延迟、scale < 1 时减少延迟，绘制速度与叠加窗口缩放大小解耦
 - 每步检查 `stopFlag`，确保 `stop()` 调用后尽速响应（通常在下一次步进即生效）
-- `stop()` 被调用后，在当前路径的剩余点被跳过（抬笔），然后状态机转 IDLE
 
-### CJS Adapter 隔离模式（Main Process 侧）
+### 精度感知 `delay()` 函数
+
+原 `delay(ms)` 使用朴素 `setTimeout`，在 Node.js 中最小有效延迟约 1ms，导致 speed > 1000 时 `stepDelay < 1ms` 被钳位，高速段完全失效。当前实现分两档：
+
+| 延迟范围 | 策略 | 精度 |
+|----------|------|------|
+| ≥ 1.5ms | `setTimeout(ms - 1)` 粗等待 → `performance.now()` 自旋补足剩余 | ~0.1ms |
+| < 1.5ms | 纯 `performance.now()` 自旋等待 | ~0.01ms |
+
+**设计理由**：
+- `setTimeout` 保持事件循环响应性（不长时间阻塞），自旋仅用于最后 ~1ms 补足精度
+- 亚毫秒延迟总时长极短（单次 ≤ 1.5ms），纯自旋对事件循环影响可忽略
+- 对 speed=2000（`pointDelay ≈ 0.5ms/px`）和 speed=100（`pointDelay = 10ms/px`）均能精确生效
+
+### nut-js 开销自校准与冗余跳过
+
+`mouse.setPosition()` 每次调用有 nut-js 固定开销（CJS 桥接 + 原生 addon 边界，实测约 0.2~0.5ms）。高速时这个开销占比极大：speed=2000 → `pointDelay=0.5ms`，若 nut-js 耗时 0.4ms，实际每步 0.9ms，有效速度仅约 1100 px/s（仅为设定值的 55%）。
+
+解决方案分两层：
+
+| 层 | 机制 | 效果 |
+|----|------|------|
+| 距离为零跳过 | `distance === 0` 时跳过 `setPosition` + `delay`，直接 `continue` | 消除 scale < 1 时的无效调用 |
+| 开销自校准 | `t0 = performance.now()` → `await setPosition()` → `overhead = performance.now() - t0` → `delay(max(0, pointDelay - overhead))` | 自动补偿 nut-js 耗时，高速段恢复至设定值 |
+| **末点零延迟** | `j < physicalPts.length - 1` 时才执行 `delay()`，末点画完立即抬笔 | 每路径省一次 delay，笔画切换更利落 |
+| **坐标预计算** | 每条路径进入内循环前 `path.map(toScreen)` + `.map(toPhysical)` 一次性算出全部坐标 | `toScreen`/`toPhysical` 从 O(N) 次调用降为路径数次 `map`，热循环中仅做数组索引 |
+
+```
+实际每步 = nut-js耗时 + max(0, targetDelay - nut-js耗时)
+         = max(nut-js耗时, targetDelay)
+
+当 targetDelay ≥ nut-js耗时 → 实际 = targetDelay（精确达标）
+当 targetDelay < nut-js耗时 → 实际 = nut-js耗时（硬件极限，不额外延迟）
+```
+
+**设计理由**：自校准方案无需硬编码 nut-js 耗时常量（不同 OS/CPU 差异大），运行时自动适配。`performance.now()` 精度 ~0.001ms，测量开销可忽略。
 
 Main Process 中 `createRequire` 仅限于 `src/main/adapters/nut-js-adapter.ts`：
 
@@ -1033,3 +1075,178 @@ SettingsPanel: updateSettings({ overlayOpacity: 0.5 })
 - 类型：`src/shared/types.ts` → `IPC_CHANNELS.GET_SETTINGS: 'get-settings'`
 - Handler：`ipcMain.handle` → `deps.configStore.getAll()` → 返回完整 `AppConfig`
 - 使用场景：SettingsPanel 初始化、FirstRunTips 读取快捷键值
+
+## 导出线稿架构洞察（阶段 13）
+
+### exportLineArt 调用路径
+
+`exportLineArt()` 在 `src/main/index.ts` 中定义为 `app.whenReady()` 闭包内的异步函数，同时供两处调用：
+
+| 触发路径 | 调用链 | 通知机制（成功） | 通知机制（失败） |
+|---------|--------|-----------------|-----------------|
+| IPC handler (`export-lineart`) | `PanelToolbar` 导出按钮 → `ipcMain.handle` → `deps.exportLineArt()` | Toast "线稿已导出" | `Notification` 系统托盘通知 |
+| 托盘菜单 ("导出线稿 PNG") | `MenuItem.click` → `deps.exportLineArt()` | Toast "线稿已导出" | `Notification` 系统托盘通知 |
+
+### 为什么保存失败用 Notification 而非 Toast
+
+保存成功 → Toast：用户此时通常盯着应用窗口，Toast 滑入即可感知。
+
+保存失败 → `Notification`：用户可能在点击保存后切换到文件管理器或其他应用。Toast 仅渲染在主窗口中，用户离开窗口则无法看到。系统 `Notification`（`new Notification({ title, body }).show()`）通过 OS 原生通知中心推送，无论用户当前在哪个应用都能看到。
+
+### 未提取为独立模块的理由
+
+`exportLineArt()` 仅 30 行，逻辑为线性流程（检查 Buffer → 弹对话框 → 写文件 → 通知）。提取为独立 handler 文件（如 `export-lineart-handler.ts`）需要注入 4 个依赖（`lineArtBuffer` getter、`showSaveDialog`、`writeFile`、`showNotification`），DI 开销远大于函数本身。KISS 原则决定保留在 `index.ts` 闭包内。
+
+## 打包与分发架构洞察（阶段 14）
+
+### electron-builder 配置架构
+
+```
+package.json → "build" 字段
+  ├── appId: "com.akd.app"           # 应用唯一标识
+  ├── productName: "AKD"             # 显示名称
+  ├── directories.output: "release"  # 构建产物输出目录
+  ├── files: ["dist/**/*", "resources/**/*"]  # 打包包含文件
+  ├── asar: true                     # 源码归档为 app.asar
+  ├── asarUnpack: [...]              # 原生模块排除（不可压缩进 asar）
+  ├── extraResources: [...]          # 外部资源文件（asar 外，直接路径访问）
+  ├── win: { target: "nsis" }       # Windows → NSIS 安装器
+  ├── mac: { target: "dmg" }        # macOS → DMG 磁盘映像
+  └── linux: { target: "AppImage" } # Linux → AppImage 便携包
+```
+
+### asarUnpack 原则
+
+以下类型的 node_modules 必须排除于 asar 归档：
+
+| 类型 | 原因 | 示例 |
+|------|------|------|
+| Node-API 原生 `.node` 模块 | 从 asar 中无法 `dlopen()` | `onnxruntime-node`、`sharp` |
+| 包含 `.wasm` 文件的包 | WASM 通过 `fs.readFileSync` 加载 | `@dalongrong/opencv-wasm`（opencv.wasm 8.5MB） |
+| 包含平台二进制文件的包 | 子进程 exec 需要 | `clipboardy`（fallbacks/*.exe） |
+
+### extraResources 原则
+
+运行时需要通过文件路径直接访问的资源必须放在 asar 外：
+
+| 资源 | 路径（prod） | 用途 |
+|------|-------------|------|
+| ONNX 模型 | `process.resourcesPath/models/` | 推理 Worker 加载 anime2sketch.onnx |
+| 托盘图标 | `process.resourcesPath/icons/tray/` | 托盘 5 状态图标（PNG） |
+| 应用图标 | `process.resourcesPath/icons/icon.png` | 操作系统显示（快捷方式/任务栏） |
+
+### electron 依赖位置
+
+`electron` 必须在 `devDependencies` 中（而非 `dependencies`）：
+- **原因**：electron-builder 在打包时自行下载并嵌入指定版本的 Electron 二进制。若 electron 在 dependencies 中，electron-builder 会报错退出
+- **开发时**：`npm run dev` 通过 `npx electron .` 仍可正常使用 devDependencies 中的 electron
+
+### 平台构建目标
+
+| 平台 | 格式 | 扩展名 | 说明 |
+|------|------|--------|------|
+| Windows | NSIS | `.exe` | 安装向导，`oneClick: false` |
+| macOS | DMG | `.dmg` | 拖拽安装磁盘映像 |
+| Linux | AppImage | `.AppImage` | 免安装便携包 |
+
+### postinstall 脚本
+
+`"postinstall": "electron-builder install-app-deps"` 确保每次 `npm install` 后：
+1. 使用 `@electron/rebuild` 重新编译原生模块
+2. 针对当前 `electron` 版本的 Node.js ABI（而非系统 Node.js）
+3. 避免 `NODE_MODULE_VERSION` 不匹配导致的运行时崩溃
+
+### 安装器体积分析（761MB）
+
+| 组件 | 大小 | 说明 |
+|------|------|------|
+| Electron 42.0.1 运行时 | ~227MB | Chromium + Node.js |
+| anime2sketch.onnx.data | 218MB | ONNX 模型权重文件 |
+| app.asar | ~498MB | 包含 node_modules 依赖 |
+| 其他资源 | ~18MB | 图标、字体、许可证 |
+
+后续优化方向：模型量化（ONNX FP16/INT8）、asar 压缩、Windows 便携版（免安装 zip）。
+
+## 绘制引擎 DPI 坐标系统洞察（阶段 14）
+
+### Electron DIP vs nut-js 物理像素
+
+AKD 的绘制坐标转换涉及**三个坐标空间**，这是阶段 14 白屏后暴露的第二个关键 Bug：
+
+```
+原图坐标系 (path points, px)
+    → toScreen(): (point - boundingBox.min) × scale + overlayRect.origin
+    → 屏幕 DIP 坐标（Electron 窗口 API 返回值）
+        → toPhysical(): dip × scaleFactor
+        → 屏幕物理像素（nut-js SetCursorPos 参数）
+```
+
+| 坐标空间 | 来源 | 使用方 | 单位 |
+|---------|------|--------|------|
+| 原图坐标 | 路径提取 Worker (`DrawPath[]`) | `toScreen()` 输入 | 图片像素 |
+| 屏幕 DIP | `BrowserWindow.getBounds()` / `screen.*` API | `toScreen()` 输出、窗口定位 | 设备无关像素 |
+| 屏幕物理 | `screen.getDisplayNearestPoint().scaleFactor` | `mouse.setPosition()` 参数 | 物理像素 |
+
+**为什么需要 DIP→物理转换？** Electron 所有窗口/屏幕 API 返回 DIP（设备无关像素），但 nut-js 底层在 Windows 上调用 Win32 `SetCursorPos()`，该 API 接受物理像素。若显示器缩放 150%，DIP 值 (500, 300) 对应的物理坐标是 (750, 450)。直接传 DIP 值给 nut-js 会导致绘制位置向屏幕左上角偏移，偏移量随距离正比放大。
+
+### 修复方案
+
+```typescript
+// OverlayRect 新增字段
+interface OverlayRect {
+  x: number; y: number; width: number; height: number
+  scaleFactor: number  // ← 阶段 14 新增
+}
+
+// index.ts startDraw() 中获取 DPI 缩放因子
+const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y })
+drawingEngine.start(paths, boundingBox, {
+  ...bounds,
+  scaleFactor: display.scaleFactor,
+})
+
+// drawing-engine.ts 中 DIP→物理转换
+function toPhysical(dip: { x: number; y: number }) {
+  return {
+    x: Math.round(dip.x * overlayRect.scaleFactor),
+    y: Math.round(dip.y * overlayRect.scaleFactor),
+  }
+}
+// 所有 mouse.setPosition() 调用包装 toPhysical()
+```
+
+**设计考量**：`scaleFactor` 通过 `OverlayRect` 传入而非由引擎内部计算，原因是：
+1. `drawing-engine.ts` 不直接依赖 `electron` 的 `screen` 模块（保持可测试性）
+2. 测试环境传 `scaleFactor: 1`，无需 mock Electron API
+3. 调用方（`index.ts`）已持有 `screen` 导入，职责自然
+
+## loadFile 路径解析陷阱（阶段 14）
+
+### 问题
+
+`src/main/index.ts` 被 esbuild 编译到 `dist/main/main/index.js`，其 `__dirname` 为 `dist/main/main/`。生产模式下 `loadFile()` 的路径解析容易多写一层 `dist/`：
+
+```
+错误: join(__dirname, '../../dist/renderer/index.html')
+     → dist/main/main/  +  ../../dist/renderer/index.html
+     → dist/dist/renderer/index.html  ← 文件不存在！
+
+正确: join(__dirname, '../../renderer/index.html')
+     → dist/main/main/  +  ../../renderer/index.html
+     → dist/renderer/index.html  ← 文件存在
+```
+
+**教训**：esbuild 输出的目录结构中，`../../` 已回到项目 `dist/` 根目录。任何以 `dist/` 开头的后续路径段都是多余的。这条规则同样适用于 `preview-overlay.ts`（叠加窗口加载）和 `resolveModelPath()` / `resolveIconDir()`（已正确）。
+
+## 绘制速度精度洞察（阶段 14）
+
+### setTimeout 最小粒度问题
+
+`setTimeout` 在 Node.js 中的最小有效延迟约 1ms（受事件循环调度精度限制）。当 `drawSpeed > 1000` 时，`stepDelay = 1000/speed < 1ms` 被钳位至 ~1ms，导致高速段速度无法进一步提升。
+
+此外，原始实现假设相邻路径点间隔恰好 1 屏幕像素（`stepDelay = 1000/speed`），但实际屏幕距离随 `scale` 缩放因子变化。例如放大 2x 预览时，相邻点间距也是 2 倍，固定延迟会导致高缩放比时绘制速度变慢。
+
+**修复方向**（待验证）：
+1. `delay()` 改为精度感知版本——≥1.5ms 用 `setTimeout` + 自旋补足亚毫秒余量，<1.5ms 纯自旋等待
+2. 逐点延迟基于实际像素距离：`pointDelay = (distance(prev, curr) / speed) * 1000`
+

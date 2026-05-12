@@ -1,20 +1,22 @@
 {
   "name": "akd",
   "version": "0.0.0",
+  "description": "AKD — 自动线稿绘制工具，基于 Anime2Sketch 将动漫图片转换为可绘制路径",
+  "author": "AKD Team",
   "type": "module",
   "private": true,
   "main": "dist/main/main/index.js",
   "scripts": {
     "dev": "npx tsx scripts/dev.ts",
     "build": "node scripts/build-main.mjs && node scripts/build-workers.mjs && npx vite build",
-    "start": "electron dist/main/main/index.js"
+    "start": "electron dist/main/main/index.js",
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "@dalongrong/opencv-wasm": "^4.8.1-1",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@nut-tree-fork/nut-js": "^4.2.6",
-    "electron": "^42.0.1",
     "electron-store": "^11.0.2",
     "lucide-vue-next": "^0.400.0",
     "onnxruntime-node": "^1.26.0",
@@ -45,12 +47,28 @@
     "asarUnpack": [
       "node_modules/onnxruntime-node/**",
       "node_modules/sharp/**",
-      "node_modules/@techstark/opencv-js/**"
-    ]
+      "node_modules/@dalongrong/opencv-wasm/**"
+    ],
+    "win": {
+      "icon": "resources/icons/icon.png",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false
+    },
+    "mac": {
+      "icon": "resources/icons/icon.png",
+      "target": "dmg"
+    },
+    "linux": {
+      "icon": "resources/icons/icon.png",
+      "target": "AppImage"
+    }
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "@vitejs/plugin-vue": "^6.0.6",
+    "electron": "^42.0.1",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.28.0",
     "tsx": "^4.21.0",

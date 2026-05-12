@@ -54,7 +54,7 @@ export function createOverlay(opts: OverlayOptions): BrowserWindow {
   overlayInteractive = false
 
   if (app.isPackaged) {
-    const overlayHtmlPath = join(__dirname, '../../dist/renderer/overlay/index.html')
+    const overlayHtmlPath = join(__dirname, '../../renderer/overlay/index.html')
     overlayWindow.loadFile(overlayHtmlPath)
   } else {
     const devUrl = process.env['VITE_DEV_SERVER_URL'] ?? 'http://localhost:5173'

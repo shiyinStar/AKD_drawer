@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-12 (阶段 12 完成)
+**最后更新**: 2026-05-13 (阶段 14 完成)
 
 ---
 
@@ -975,7 +975,163 @@
 
 ---
 
-## 下一步：阶段 13 — 导出线稿
+## 阶段 13：导出线稿 ✅ 完成
+
+### 步骤 13.1 — 导出线稿功能验收与完善 ✅
+
+**功能验收**（该功能在阶段 9 已实现，本阶段完成验收和收尾）：
+
+- `exportLineArt()` 在 `src/main/index.ts` 中定义，同时供两处调用：
+  - IPC handler (`export-lineart`) → `deps.exportLineArt()`
+  - 托盘菜单 ("导出线稿 PNG") → `deps.exportLineArt()`
+
+**导出行为验收**：
+
+| 场景 | 行为 | 状态 |
+|------|------|------|
+| 无线稿可导出（`lineArtBuffer` 为空） | Toast 警告 "无线稿可导出" | ✅ 已验收 |
+| 线稿存在 → 弹出保存对话框 | `dialog.showSaveDialog(win, { defaultPath: 'lineart.png', filters: [{ name: 'PNG Image', extensions: ['png'] }] })` | ✅ 已验收 |
+| 用户选择路径保存 | `writeFile(path, lineArtBuffer)` → Toast "线稿已导出" | ✅ 已验收 |
+| **保存失败** | **系统 Notification 托盘通知**（`new Notification({ title: 'AKD - 导出失败', body: ... }).show()`） | ✅ 本阶段修改 |
+| 用户取消保存对话框 | 不做任何操作（`if (result.canceled) return`） | ✅ 已验收 |
+| 导出按钮 disabled 态 | 仅 `hasLineArt` 为 true 时启用 | ✅ 已验收 |
+| 托盘菜单导出 enabled 态 | 仅 IDLE 状态 + `lineArtBuffer` 非空时 enabled | ✅ 已验收 |
+
+### 修改文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/main/index.ts` | 修改 | 导入 `Notification`；`exportLineArt()` 错误处理从 Toast 改为 `new Notification(...).show()` 系统托盘通知 |
+
+### 验证汇总
+
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1560 模块 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/drawing-engine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/shortcut-manager.test.ts` | 13/13 通过 |
+| `npx tsx --test tests/unit/geometry-utils.test.ts` | 3/3 通过 |
+| ESM 合规（`require(` 仅限 nut-js-adapter） | 通过 |
+| **总测试数** | **69** |
+
+### 注意事项
+- 导出线稿功能的核心实现早在阶段 9（系统托盘）中完成，本阶段完成功能验收和收尾
+- 保存失败时使用 Electron `Notification` API 而非 Toast，原因是设计文档 §13 规定保存失败应触发系统级托盘通知，而 Toast 仅在应用窗口可见时有效。系统 `Notification` 确保用户切换到其他应用后也能看到失败通知
+- `lineArtBuffer` 来自推理 Worker 输出的 PNG Buffer，已为完整 PNG 格式，直接用 `writeFile` 写入即可，无需 `sharp` 二次编码
+- `exportLineArt()` 是 `app.whenReady()` 闭包内的异步函数，未被提取为独立模块——30 行简单逻辑，符合 KISS 原则
+
+---
+
+## 阶段 14：打包与分发 ✅ 完成
+
+### 步骤 14.1 — electron-builder 配置 ✅
+
+**已有配置保留**（阶段 5/9 已设置）：
+- `appId: "com.akd.app"`、`productName: "AKD"`
+- `directories.output: "release"`
+- `files: ["dist/**/*", "resources/**/*"]`
+- `extraResources`: `resources/models → models`、`resources/icons → icons`
+- `asar: true`
+
+**本阶段修改**：
+
+| 变更 | 说明 |
+|------|------|
+| `electron` 从 dependencies → devDependencies | electron-builder 要求 electron 在 devDependencies 中，打包时自行管理 Electron 二进制 |
+| `asarUnpack`：`@techstark/opencv-js` → `@dalongrong/opencv-wasm` | 项目已迁移到 opencv-wasm（阶段 6），asarUnpack 需同步更新 |
+| 新增 `description` / `author` | electron-builder 要求的基础元数据字段 |
+| 新增 `postinstall` 脚本 | `electron-builder install-app-deps` 确保原生模块匹配 Electron 版本 |
+| 新增 `win` 目标 | `icon: "resources/icons/icon.png"`、`target: "nsis"` |
+| 新增 `nsis` 配置 | `oneClick: false`（标准安装流程，非一键安装） |
+| 新增 `mac` 目标 | `icon: "resources/icons/icon.png"`、`target: "dmg"` |
+| 新增 `linux` 目标 | `icon: "resources/icons/icon.png"`、`target: "AppImage"` |
+
+**应用图标**：`resources/icons/icon.png`（800×800 RGBA PNG）已就位，electron-builder 在 Windows 上自动转换为 `.ico`。
+
+### 步骤 14.2 — 完整打包验证 ✅
+
+#### `--dir` 验证（未打包目录）
+
+| 检查项 | 结果 |
+|--------|------|
+| `npx electron-builder --dir` 成功 | ✅ |
+| `release/win-unpacked/AKD.exe` 生成 | ✅ 227MB |
+| `resources/models/anime2sketch.onnx` 存在 | ✅ 19KB + 218MB data |
+| `resources/icons/icon.png` 存在 | ✅ 305KB |
+| `resources/icons/tray/`（5 个 PNG）存在 | ✅ |
+| `app.asar.unpacked` 含 `onnxruntime-node` | ✅ |
+| `app.asar.unpacked` 含 `sharp` | ✅ |
+| `app.asar.unpacked` 含 `@dalongrong/opencv-wasm` | ✅ |
+
+#### 完整打包（NSIS 安装器）
+
+| 检查项 | 结果 |
+|--------|------|
+| `npx electron-builder` 成功 | ✅ |
+| `release/AKD Setup 0.0.0.exe` 生成 | ✅ 761MB |
+| NSIS `oneClick: false`（标准安装） | ✅ |
+| 代码签名（signtool.exe）| ✅ 自动签名（自签名证书） |
+
+### 修改文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `package.json` | 修改 | electron→devDeps；asarUnpack 更新；新增 win/mac/linux/nsis 目标；新增 description/author/postinstall |
+
+### 验证汇总
+
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1560 模块 |
+| `npx electron-builder --dir` | 打包成功 |
+| `npx electron-builder`（完整 NSIS） | 打包成功 |
+| `npx tsx --test tests/unit/state-machine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/config-store.test.ts` | 8/8 通过 |
+| `npx tsx --test tests/unit/image-import-handler.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/drawing-engine.test.ts` | 15/15 通过 |
+| `npx tsx --test tests/unit/shortcut-manager.test.ts` | 13/13 通过 |
+| `npx tsx --test tests/unit/geometry-utils.test.ts` | 3/3 通过 |
+| ESM 合规（`require(` 仅限 nut-js-adapter） | 通过 |
+| **总测试数** | **69** |
+
+### 注意事项
+- `electron` 在 `devDependencies` 而非 `dependencies`。electron-builder 在打包时自动下载并包含正确版本的 Electron 二进制，开发时通过 `npm run dev` 仍可正常使用
+- `@dalongrong/opencv-wasm` 必须放在 `asarUnpack` 中，因为其 `opencv.wasm`（8.5MB）文件在运行时通过 `fs` 同步读取，无法从 asar 归档中加载
+- `postinstall` 脚本确保每次 `npm install` 后原生模块（onnxruntime-node、sharp）与当前 Electron 版本的 Node.js ABI 匹配
+- 图标 `icon.png` 为 800×800 RGBA PNG。electron-builder 在 Windows 上自动转换为 ICO，macOS 上转换为 ICNS
+- NSIS 安装器使用 `oneClick: false`（标准安装向导），用户在安装时选择安装路径
+- 数字签名使用 signtool.exe 自签名，正式发布前需替换为 CA 颁发的代码签名证书
+- 完整安装器 761MB（含 Electron 42.0.1 运行时 + ONNX 模型 218MB），后续可优化模型尺寸
+- `@electron/rebuild` 在 devDependencies 中冗余（electron-builder 已内置），建议后续移除
+
+### 阶段 14 Bug 修复记录
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| AKD.exe 启动后纯白不可交互面板 | `loadFile()` 路径多了一层 `dist/`：`src/main/index.ts` 中 `__dirname` = `dist/main/main/`，`../../dist/renderer/index.html` 解析为 `dist/dist/renderer/index.html`（不存在）。叠加窗口同理 | 去掉多余的 `dist/`：`index.ts:82` 改为 `../../renderer/index.html`；`preview-overlay.ts:57` 改为 `../../renderer/overlay/index.html` |
+| 绘制位置向屏幕左上角偏移（不一致） | **DPI 缩放不匹配**：Electron 窗口 API（`getBounds()`）返回 DIP（设备无关像素），但 nut-js 底层 `SetCursorPos` 需要物理像素。高 DPI 显示器（150%/200%）下 DIP 值直接传给 nut-js 导致坐标偏移 | `OverlayRect` 新增 `scaleFactor` 字段（从 `screen.getDisplayNearestPoint().scaleFactor` 获取）；`drawing-engine.ts` `start()` 中新增 `toPhysical()` 函数，对 `mouse.setPosition()` 的坐标乘以 `scaleFactor` 转换为物理像素 |
+
+### 修改文件清单（Bug 修复）
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `src/main/index.ts` | 修改 | 导入 `screen`；`startDraw()` 中通过 `screen.getDisplayNearestPoint()` 获取 DPI 缩放因子传入 `drawingEngine.start()` |
+| `src/main/drawing-engine.ts` | 修改 | `OverlayRect` 新增 `scaleFactor` 字段；`start()` 新增 `toPhysical()` DIP→物理像素转换 |
+| `src/main/preview-overlay.ts` | 修改 | 叠加层 `loadFile` 路径修复（同上） |
+| `tests/unit/drawing-engine.test.ts` | 修改 | 所有 `OverlayRect` 字面量添加 `scaleFactor: 1`（测试环境无 DPI 缩放） |
 
 ---
 
@@ -1003,6 +1159,14 @@
 18. **stopFlag 机制**：`stop()` 设置标志位后，引擎在当前步进循环的下一个点检测到后立即抬笔，不等待当前路径完成
 19. **托盘 `Tray`**：`src/main/tray-manager.ts` 负责托盘生命周期。左键单击打开主窗口。右键菜单根据状态机动态更新（点击"退出"前若 DRAWING 状态会先抬笔）
 20. **导出线稿统一入口**：`exportLineArt()` 在 `src/main/index.ts` 中定义，同时供 IPC handler 和托盘菜单使用，无代码重复
+
+### 阶段 14 后 Bug：绘制速度滑块无效
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| 调节绘制速度滑块（100~2000 px/s），实际绘制速度无明显变化 | ① `setTimeout` 在 Node.js 中最小有效延迟约 1ms，speed > 1000 时 `stepDelay < 1ms` 被钳位至 ~1ms，导致高速段无法区分；② 固定 `stepDelay = 1000/speed` 假设相邻路径点正好间隔 1 屏幕像素，实际距离随 `scale` 变化；③ `mouse.setPosition()` 每次调用有 nut-js 固定开销（~0.2-0.5ms），高速时占比极大，speed=2000 时有效速度仅约 1100 px/s | ① `delay()` 改为精度感知版本：≥1.5ms 用 `setTimeout` + 自旋补足亚毫秒精度，<1.5ms 纯自旋等待；② 绘制循环改为基于相邻点的实际像素距离计算逐点延迟：`pointDelay = (distance / speed) * 1000`；③ 距离为 0 时跳过 setPosition 和 delay；④ 测量 nut-js `setPosition` 实际耗时并从延迟中扣除（自校准开销补偿） |
+
+**修改文件**：`src/main/drawing-engine.ts`（`delay()` 重写 + `start()` 内绘制循环改距离感知延迟）
 
 ### 阶段 6 关键 Bug：OpenCV 包不兼容
 

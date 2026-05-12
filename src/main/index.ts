@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, dialog, globalShortcut } from 'electron'
+import { app, BrowserWindow, session, dialog, globalShortcut, Notification, screen } from 'electron'
 import { join, dirname } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -79,7 +79,7 @@ function createMainWindow(): BrowserWindow {
   })
 
   if (app.isPackaged) {
-    win.loadFile(join(__dirname, '../../dist/renderer/index.html'))
+    win.loadFile(join(__dirname, '../../renderer/index.html'))
   } else {
     win.loadURL(process.env['VITE_DEV_SERVER_URL'] ?? 'http://localhost:5173')
   }
@@ -170,11 +170,14 @@ app.whenReady().then(() => {
     if (!overlay || overlay.isDestroyed()) return
 
     const bounds = overlay.getBounds()
+    // nut-js 使用物理像素，需获取当前显示器的 DPI 缩放因子
+    const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y })
     drawingEngine.start(paths, boundingBox, {
       x: bounds.x,
       y: bounds.y,
       width: bounds.width,
       height: bounds.height,
+      scaleFactor: display.scaleFactor,
     })
   }
 
@@ -234,10 +237,7 @@ app.whenReady().then(() => {
       } satisfies ToastMessage)
     } catch (err) {
       const message = err instanceof Error ? err.message : '保存失败'
-      win.webContents.send(IPC_CHANNELS.SHOW_TOAST, {
-        type: 'error',
-        message: `导出失败: ${message}`,
-      } satisfies ToastMessage)
+      new Notification({ title: 'AKD - 导出失败', body: `导出线稿失败: ${message}` }).show()
     }
   }
 
