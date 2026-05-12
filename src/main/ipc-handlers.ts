@@ -5,6 +5,7 @@ import type { StatusState, ToastMessage } from '../shared/types.js'
 import type { AppContext } from './app-context.js'
 import { handleImportImage, handleImportImageFromBase64 } from './image-import-handler.js'
 import { getOverlayWindow } from './preview-overlay.js'
+import type { createDrawingEngine } from './drawing-engine.js'
 
 export interface IpcHandlerDeps {
   getState: () => StatusState
@@ -13,6 +14,7 @@ export interface IpcHandlerDeps {
   runPipeline: (imageBuffer: Buffer) => Promise<void>
   enterPreview: () => void
   exitPreview: () => void
+  drawingEngine: ReturnType<typeof createDrawingEngine>
 }
 
 export function registerIpcHandlers(deps: IpcHandlerDeps): void {

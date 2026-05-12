@@ -1,6 +1,6 @@
 # AKD 项目架构
 
-**最后更新**: 2026-05-12 (阶段 7 完成)
+**最后更新**: 2026-05-12 (阶段 8 完成)
 
 ---
 
@@ -32,6 +32,9 @@ AKD_final/
 │   │   ├── worker-manager.ts       # Worker 生命周期管理
 │   │   ├── pipeline-orchestrator.ts # 管线编排器
 │   │   ├── preview-overlay.ts       # 叠加窗口管理 + 全局快捷键
+│   │   ├── drawing-engine.ts       # 绘制引擎（阶段 8 新增）
+│   │   └── adapters/
+│   │       └── nut-js-adapter.ts   # CJS→ESM 桥接（阶段 8 新增）
 │   ├── preload/
 │   │   ├── index.ts          # 主窗口 contextBridge preload
 │   │   └── overlay.ts        # 叠加窗口 contextBridge preload
@@ -80,9 +83,16 @@ AKD_final/
 │   ├── architecture.md       # 本文件
 │   └── progress.md           # 开发进度
 └── tests/
-    └── unit/
-        ├── state-machine.test.ts    # 状态机 15 个单元测试
-        └── config-store.test.ts     # 配置存储 8 个单元测试
+    ├── unit/
+    │   ├── state-machine.test.ts        # 状态机 15 个单元测试
+    │   ├── config-store.test.ts         # 配置存储 8 个单元测试
+    │   ├── image-import-handler.test.ts # 图片导入 15 个单元测试
+    │   ├── inference-worker.test.ts     # 推理 Worker 6 个单元测试
+    │   ├── geometry-utils.test.ts       # 几何工具 3 个单元测试
+    │   ├── path-extraction-worker.test.ts # 路径提取 Worker 7 个单元测试
+    │   └── drawing-engine.test.ts       # 绘制引擎 13 个单元测试（阶段 8 新增）
+    └── integration/
+        └── pipeline-e2e.test.ts         # 管线端到端 5 个集成测试
 ```
 
 ## 文件职责说明
@@ -373,6 +383,36 @@ ONNX Runtime 推理 Worker — 阶段 5 实现：
 - 穿透模式：`setIgnoreMouseEvents(true)` + 发送 `overlay-set-interactive: false` → 隐藏手柄
 - **⚠ 阶段 10 提醒**：`Ctrl+Shift+F9` 需在快捷键管理器中实现为可配置项
 
+### src/main/drawing-engine.ts
+绘制引擎核心 — 阶段 8 新增：
+- `createDrawingEngine({ stateMachine, configStore, getMainWindow, destroyOverlay })` 工厂函数，返回 `{ start, stop, isActive }`
+- **`start(paths, boundingBox, overlayRect)`** — 启动绘制：
+  1. 验证状态为 PREVIEWING → 否则抛异常
+  2. 验证 `overlayRect` 尺寸 > 0
+  3. 从 `configStore` 读取 `drawSpeed`（经 `clampSpeed` 钳制 100~2000）和 `mouseButton`（`toButton` 映射 left→LEFT, right→RIGHT）
+  4. 计算缩放因子 `scale = max(overlayRect.width/boundingBox.width, overlayRect.height/boundingBox.height)`
+  5. 状态机转 DRAWING → 推送 IPC `APP_STATE`
+  6. 调用 `destroyOverlay()` 关闭叠加窗口
+  7. 异步绘制循环：逐路径 → 跳到起点落笔 → 逐点 `mouse.setPosition()` + `await delay(1000/speed)` → 抬笔
+  8. 每步检查 `stopFlag`，路径间推送 `DRAW_STATUS` IPC
+  9. 全部完成 → 转 IDLE + Toast "绘制完成"
+  10. 异常 → 强制抬笔 → 转 ERROR
+- **`stop()`** — 设置 `stopFlag = true`，绘制循环在下一个步进点检测到后抬笔 + 转 IDLE
+- **`isActive()`** — 返回当前是否正在绘制中
+- 导出纯函数供测试：`clampSpeed`（速度钳制）、`toScreen`（坐标转换）、`toButton`（按键映射）
+- 坐标转换公式严格按设计文档 §9.2：`screenXY = overlayRect.origin + (point - boundingBox.min) × scale`
+- `stopFlag` 机制确保 `stop()` 调用后尽速响应，不等待当前路径完成
+- **注意**：引擎不直接访问叠加窗口。`overlayRect` 由调用方在调用 `start()` 前通过 `getOverlayWindow()?.getBounds()` 捕获
+
+### src/main/adapters/nut-js-adapter.ts
+CJS → ESM Adapter — 阶段 8 新增：
+- **Main Process 中唯一使用 `createRequire` 的文件**（与 Worker 中的 `createRequire` 用途不同）
+- 从 `@nut-tree-fork/nut-js`（CJS）require 出 `mouse`、`Button`
+- 重新导出为 ESM 命名导出，带类型标注（`mouse` 标注 `setPosition`/`pressButton`/`releaseButton` 方法签名，`Button` 标注 LEFT/MIDDLE/RIGHT 枚举）
+- 其他文件通过 `import { mouse, Button } from '../adapters/nut-js-adapter.js'` 正常 ESM 导入
+- 文件顶部 JSDoc 明确标注"此文件为 AKD 项目中唯一使用 createRequire 的位置"
+- 遵循设计文档 §3.4.6 的 CJS 隔离策略
+
 ### src/renderer/overlay/index.html
 叠加层独立 HTML 页面 — 阶段 7 新增：
 - 最小页面结构：`<canvas>` + 缩放标签 `<div>`
@@ -565,4 +605,44 @@ const { cv } = require('@dalongrong/opencv-wasm')
 - `configStore` — 配置存储单例（`ConfigStore` 实例，cwd 指向 `dirname(process.execPath)`）
 - `mainWindow` — 主 BrowserWindow 引用（初始为 null，窗口创建后赋值）
 
-各模块通过 `IpcHandlerDeps` 等接口接收依赖，禁止模块间直接 import 全局单例。`registerIpcHandlers()` 接收 `{ getState, getMainWindow, getContext, runPipeline, enterPreview, exitPreview }` 六个 getter/回调。
+各模块通过 `IpcHandlerDeps` 等接口接收依赖，禁止模块间直接 import 全局单例。`registerIpcHandlers()` 接收 `{ getState, getMainWindow, getContext, runPipeline, enterPreview, exitPreview, drawingEngine }` 七个 getter/回调。
+
+## 绘制引擎架构洞察（阶段 8）
+
+### 坐标转换链路
+
+绘制引擎的坐标转换经过以下链路：
+
+```
+原图坐标系 (path point)
+  → toScreen(): (point - boundingBox.min) × scale + overlayRect.origin
+  → 屏幕绝对坐标 (mouse.setPosition)
+```
+
+- `scale = max(overlayRect.width / boundingBox.width, overlayRect.height / boundingBox.height)` — 等比缩放取较大维度
+- `overlayRect` 在 `start()` 调用前由调用方通过 `getOverlayWindow()?.getBounds()` 捕获，包含 `{ x, y, width, height }`
+- 引擎不直接引用叠加窗口（避免在销毁窗口后访问已失效的引用）
+
+### 异步绘制循环与 stopFlag
+
+绘制循环采用 `async/await` + `setTimeout` 异步模式：
+
+```
+for each path:
+  起点落笔 → for each point: setPosition → await delay(stepDelay) → if stopFlag: break → 抬笔
+```
+
+- `stepDelay = 1000 / drawSpeed` 毫秒 — 速度越快、延迟越短
+- 每步检查 `stopFlag`，确保 `stop()` 调用后尽速响应（通常在下一次步进即生效）
+- `stop()` 被调用后，在当前路径的剩余点被跳过（抬笔），然后状态机转 IDLE
+
+### CJS Adapter 隔离模式（Main Process 侧）
+
+Main Process 中 `createRequire` 仅限于 `src/main/adapters/nut-js-adapter.ts`：
+
+| 文件 | createRequire | 用途 |
+|------|--------------|------|
+| `src/main/adapters/nut-js-adapter.ts` | ✅ 唯一使用 | 桥接 `@nut-tree-fork/nut-js`（CJS） |
+| 其他 `src/main/**/*.ts` | ❌ 禁止 | 通过 ESM import 从 adapter 导入 |
+
+与 Worker 中的 OpenCV 桥接不同（Worker 在文件内直接使用 `createRequire`），Main Process 遵循更严格的隔离策略——Adapter 文件单独存在，业务代码零 CJS 互操作。

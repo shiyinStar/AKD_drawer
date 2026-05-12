@@ -1,6 +1,6 @@
 # AKD 开发进度
 
-**最后更新**: 2026-05-12 (阶段 7 完成)
+**最后更新**: 2026-05-12 (阶段 8 完成)
 
 ---
 
@@ -571,7 +571,68 @@
 
 ---
 
-## 下一步：阶段 8 — 绘制引擎
+---
+## 阶段 8：绘制引擎 ✅ 完成
+
+### 步骤 8.1 — nut.js Adapter 封装 ✅
+- `src/main/adapters/nut-js-adapter.ts` 创建：
+  - AKD 项目中**唯一**使用 `createRequire` 的 Main Process 文件
+  - 从 `@nut-tree-fork/nut-js` require 出 `mouse`、`Button`
+  - 重新导出为 ESM 命名导出，带类型标注
+  - 文件顶部 JSDoc 标注"此文件为 CJS → ESM Adapter，是唯一使用 createRequire 的位置"
+
+### 步骤 8.2 — 绘制引擎核心实现 ✅
+- `src/main/drawing-engine.ts` 创建：
+  - `createDrawingEngine(deps)` 工厂函数，接收 `stateMachine`/`configStore`/`getMainWindow`/`destroyOverlay`
+  - **`start(paths, boundingBox, overlayRect)`** 方法：
+    1. 验证当前状态为 PREVIEWING → 否则抛出
+    2. 验证 `overlayRect` 尺寸 > 0
+    3. 读取配置：`drawSpeed`（钳制 100~2000）、`mouseButton`（left→LEFT, right→RIGHT, 其他→LEFT）
+    4. 计算缩放因子：`scale = max(overlayRect.width / boundingBox.width, overlayRect.height / boundingBox.height)`
+    5. 状态机转 DRAWING → IPC 推送 `APP_STATE`
+    6. 调用 `destroyOverlay()` 关闭叠加窗口
+    7. 逐路径逐点移动鼠标：`mouse.setPosition()` → `await delay(1000/speed)` → 每步检查 `stopFlag`
+    8. 路径间：抬笔 → 移动到下一条起点 → 落笔
+    9. 全部完成 → 状态机转 IDLE → Toast "绘制完成"
+    10. 异常 → 强制抬笔 → 状态机转 ERROR
+  - **`stop()`** 方法：设置 `stopFlag = true`，下一个步进循环检测到后立即抬笔 → 转 IDLE
+  - **`isActive()`** 方法：返回当前是否正在绘制
+  - 导出纯函数供测试：`clampSpeed`、`toScreen`、`toButton`
+  - 坐标转换公式：`screenXY = overlayRect.origin + (point - boundingBox.min) × scale`（与设计文档 §9.2 一致）
+  - 步进延迟：`1000 / drawSpeed` 毫秒
+
+### 步骤 8.3 — 集成到主进程 ✅
+- `src/main/ipc-handlers.ts`：`IpcHandlerDeps` 新增 `drawingEngine: ReturnType<typeof createDrawingEngine>`
+- `src/main/index.ts`：
+  - 导入 `createDrawingEngine`、`getOverlayWindow`
+  - 创建 `drawingEngine` 实例（传入 stateMachine/configStore/getMainWindow/destroyOverlay）
+  - 传入 `registerIpcHandlers` 的 deps
+
+### 新增测试文件
+| 文件 | 用例 | 说明 |
+|------|------|------|
+| `tests/unit/drawing-engine.test.ts` | 13 | clampSpeed(7) + toScreen(4) + 状态校验(2) |
+
+### 验证汇总
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc -p tsconfig.main.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.shared.json --noEmit` | 通过 |
+| `npx tsc -p tsconfig.worker.json --noEmit` | 通过 |
+| `node scripts/build-main.mjs` | 构建成功 |
+| `node scripts/build-workers.mjs` | 构建成功 |
+| `npx vite build` | 构建成功，1541 模块 |
+| `npx tsx --test tests/unit/drawing-engine.test.ts` | 13/13 通过 |
+| `createRequire` 合规（仅 adapter + 已知 Worker）| 通过 |
+
+### 注意事项
+- 绘制引擎的**实际触发**（F6 startDraw / F7 stopDraw）将在阶段 10 快捷键管理器中实现
+- 当前引擎已就绪，可通过 `drawingEngine.start(paths, boundingBox, overlayRect)` 直接调用
+- `overlayRect` 需在调用 `start()` 前通过 `getOverlayWindow()?.getBounds()` 捕获叠加窗口的当前屏幕位置和尺寸
+
+---
+
+## 下一步：阶段 9 — 系统托盘
 
 ---
 
@@ -591,6 +652,10 @@
 12. **叠加层置顶**：500ms 定时器强制 `setAlwaysOnTop(true, 'screen-saver')`，防止被其他软件覆盖
 13. **⚠ 阶段 10 提醒**：`Ctrl+Shift+F9`（切换穿透）需要在阶段 10 快捷键管理器中实现为可配置项，与其他快捷键（F5/F6/F7）同等对待
 14. **路径提取分辨率**：在原始图片尺寸下进行，大图需注意性能；叠加层 Canvas 坐标映射会缩放，不依赖原始分辨率
+15. **nut.js Adapter**：`src/main/adapters/nut-js-adapter.ts` 是 Main Process 中唯一使用 `createRequire` 的位置，其他文件通过 ESM import 从此 adapter 导入
+16. **绘制引擎不直接操作窗口**：`start()` 接收 `overlayRect`（由调用方在调用前通过 `getOverlayWindow()?.getBounds()` 捕获），引擎本身不依赖叠加窗口引用
+17. **绘制参数校验内置于引擎**：`drawSpeed` 钳制 100~2000、`mouseButton` 回退 left、`overlayRect` 尺寸校验，调用方无需预处理
+18. **stopFlag 机制**：`stop()` 设置标志位后，引擎在当前步进循环的下一个点检测到后立即抬笔，不等待当前路径完成
 
 ### 阶段 6 关键 Bug：OpenCV 包不兼容
 
